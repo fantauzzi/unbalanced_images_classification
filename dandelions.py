@@ -3,6 +3,7 @@ import tensorflow as tf
 import tensorflow_hub as hub
 from tensorflow.keras import layers
 import numpy as np
+import time
 import PIL.Image as Image
 from sklearn.metrics import roc_curve, auc, precision_recall_curve, average_precision_score, \
     plot_precision_recall_curve, f1_score, confusion_matrix
@@ -12,76 +13,7 @@ IMG_SHAPE = (IMAGE_SIZE[0], IMAGE_SIZE[1], 3)
 EPOCHS = 5
 BATCH_SIZE = 16
 VALIDATION_BATCH_SIZE = 64
-
-# classifier_url = "https://tfhub.dev/google/tf2-preview/mobilenet_v2/classification/2"  # @param {type:"string"}
-
-"""
-data_root = tf.keras.utils.get_file(
-  'flower_photos','https://storage.googleapis.com/download.tensorflow.org/example_images/flower_photos.tgz',
-   untar=True)
-"""
-
-data_root = '/home/fanta/.keras/datasets/flower_photos_binary'
-image_generator = tf.keras.preprocessing.image.ImageDataGenerator(rescale=1 / 255, validation_split=.2)
-# TODO try other interpolations, e.g. bicubic
-training_data = image_generator.flow_from_directory(str(data_root),
-                                                    target_size=IMAGE_SIZE,
-                                                    class_mode='binary',
-                                                    classes=['non-daisy', 'daisy'],
-                                                    subset='training',
-                                                    batch_size=BATCH_SIZE)
-
-
-def make_validation_generator():
-    validation_data = image_generator.flow_from_directory(str(data_root),
-                                                          target_size=IMAGE_SIZE,
-                                                          class_mode='binary',
-                                                          classes=['non-daisy', 'daisy'],
-                                                          subset='validation',
-                                                          batch_size=VALIDATION_BATCH_SIZE,
-                                                          shuffle=False)
-    return validation_data
-
-
-validation_data = make_validation_generator()
-
-
-def make_model_MobileNetV2():
-    base_model = tf.keras.applications.MobileNetV2(input_shape=IMG_SHAPE,
-                                                   include_top=False,
-                                                   weights='imagenet')
-    for layer in base_model.layers:
-        layer.trainable = False
-    global_average_layer = tf.keras.layers.GlobalAveragePooling2D()  # Try with Flatten()
-    dense_layer = tf.keras.layers.Dense(320, activation='relu')
-    prediction_layer = tf.keras.layers.Dense(1, activation='sigmoid')
-    # prediction_layer = tf.keras.layers.Dense(1)
-    model = tf.keras.Sequential([
-        base_model,
-        global_average_layer,
-        # dense_layer,
-        prediction_layer
-    ])
-    return model
-
-
-model = make_model_MobileNetV2()
-model.summary()
-model.compile(
-    optimizer=tf.keras.optimizers.Adam(),  # Consider others, e.g. RMSprop
-    loss=tf.keras.losses.BinaryCrossentropy(from_logits=True),
-    metrics=[tf.keras.metrics.BinaryAccuracy(), tf.keras.metrics.Precision(),
-             tf.keras.metrics.Recall(), tf.keras.metrics.AUC()])  # tf.keras.metrics.Precision(), tf.keras.metrics.Recall()]
-
-steps_per_train_epoch = np.ceil(training_data.samples / training_data.batch_size)
-steps_per_val_epoch = np.ceil(validation_data.samples / validation_data.batch_size)
-# batch_stats_callback = CollectBatchStats()
-
-history = model.fit(training_data, epochs=EPOCHS,
-                    steps_per_epoch=steps_per_train_epoch,
-                    validation_data=validation_data,
-                    validation_steps=steps_per_val_epoch,
-                    verbose=1)
+THETA = .5
 
 
 def plot_history(history):
@@ -114,35 +46,28 @@ def plot_history(history):
     ax2.legend(loc='center right')
 
 
-plot_history(history)
-plt.show()
+def plot_classified_samples(validation_samples, training_data, model, theta=THETA):
+    class_names = sorted(training_data.class_indices.items(), key=lambda pair: pair[1])
+    class_names = np.array([key.title() for key, value in class_names])
 
-class_names = sorted(training_data.class_indices.items(), key=lambda pair: pair[1])
-class_names = np.array([key.title() for key, value in class_names])
+    for image_batch, label_batch in validation_samples:
+        print("Image batch shape: ", image_batch.shape)
+        print("Label batch shape: ", label_batch.shape)
+        break
+    predicted_batch = model.predict(image_batch)
+    predicted_id = (np.squeeze(predicted_batch) >= theta).astype(int)
+    predicted_label_batch = class_names[predicted_id]
+    label_id = label_batch.astype(int)
 
-for image_batch, label_batch in validation_data:
-    print("Image batch shape: ", image_batch.shape)
-    print("Label batch shape: ", label_batch.shape)
-    break
-theta = .5
-predicted_batch = model.predict(image_batch)
-# predicted_id = np.argmax(predicted_batch, axis=-1)
-# predicted_id = np.sign(np.squeeze(predicted_batch)).clip(min=0).astype(int)
-predicted_id = (np.squeeze(predicted_batch) >= theta).astype(int)
-predicted_label_batch = class_names[predicted_id]
-# label_id = np.sign(np.squeeze(label_batch)).clip(min=0).astype(int)
-label_id = label_batch.astype(int)
-
-plt.figure(figsize=(10, 9))
-plt.subplots_adjust(hspace=0.5)
-for n in range(30):
-    plt.subplot(6, 5, n + 1)
-    plt.imshow(image_batch[n])
-    color = "green" if predicted_id[n] == label_id[n] else "red"
-    plt.title(predicted_label_batch[n].title(), color=color)
-    plt.axis('off')
-_ = plt.suptitle("Model predictions (green: correct, red: incorrect)")
-plt.show()
+    plt.figure(figsize=(10, 9))
+    plt.subplots_adjust(hspace=0.5)
+    for n in range(30):
+        plt.subplot(6, 5, n + 1)
+        plt.imshow(image_batch[n])
+        color = "green" if predicted_id[n] == label_id[n] else "red"
+        plt.title(predicted_label_batch[n].title(), color=color)
+        plt.axis('off')
+    _ = plt.suptitle("Model predictions (green: correct, red: incorrect)")
 
 
 def plot_auc(t_y, p_y):
@@ -165,40 +90,108 @@ def plot_pr(t_y, p_y):
     c_ax.set_ylabel('Precision')
 
 
-# my_model.load_weights(weight_path)
-validation_data = make_validation_generator()
+def main():
+    # classifier_url = "https://tfhub.dev/google/tf2-preview/mobilenet_v2/classification/2"  # @param {type:"string"}
 
-# prediction = model.predict(validation_data, steps=steps_per_val_epoch, verbose=1)
-prediction = model.predict(validation_data, batch_size=validation_data.batch_size, verbose=1)
-# pred_df = np.squeeze(pred_df)
-prediction = np.squeeze(prediction)
-assert len(prediction) == len(validation_data.classes)
-predicted_id = (np.squeeze(prediction) >= theta).astype(int)
-print('Accuracy on validation set', np.sum(validation_data.classes == predicted_id) / len(predicted_id))
-print('F1 score on validation set', f1_score(validation_data.classes, predicted_id))
-plot_auc(validation_data.classes, prediction)
-plt.show()
-plot_pr(validation_data.classes, prediction)
-plt.show()
+    """
+    data_root = tf.keras.utils.get_file(
+      'flower_photos','https://storage.googleapis.com/download.tensorflow.org/example_images/flower_photos.tgz',
+       untar=True)
+    """
 
-import time
+    data_root = '/home/fanta/.keras/datasets/flower_photos_binary'
+    image_generator = tf.keras.preprocessing.image.ImageDataGenerator(rescale=1 / 255, validation_split=.2)
+    # TODO try other interpolations, e.g. bicubic
+    training_data = image_generator.flow_from_directory(str(data_root),
+                                                        target_size=IMAGE_SIZE,
+                                                        class_mode='binary',
+                                                        classes=['non-daisy', 'daisy'],
+                                                        subset='training',
+                                                        batch_size=BATCH_SIZE)
 
-t = time.time()
+    def make_validation_generator(shuffle=False):
+        validation_data = image_generator.flow_from_directory(str(data_root),
+                                                              target_size=IMAGE_SIZE,
+                                                              class_mode='binary',
+                                                              classes=['non-daisy', 'daisy'],
+                                                              subset='validation',
+                                                              batch_size=VALIDATION_BATCH_SIZE,
+                                                              shuffle=shuffle)
+        return validation_data
 
-export_path = "/tmp/saved_models/{}".format(int(t))
-model.save(export_path, save_format='tf')
+    validation_data = make_validation_generator()
 
-reloaded = tf.keras.models.load_model(export_path)
+    def make_model_MobileNetV2():
+        base_model = tf.keras.applications.MobileNetV2(input_shape=IMG_SHAPE,
+                                                       include_top=False,
+                                                       weights='imagenet')
+        for layer in base_model.layers:
+            layer.trainable = False
+        global_average_layer = tf.keras.layers.GlobalAveragePooling2D()  # Try with Flatten()
+        dense_layer = tf.keras.layers.Dense(320, activation='relu')
+        prediction_layer = tf.keras.layers.Dense(1, activation='sigmoid')
+        # prediction_layer = tf.keras.layers.Dense(1)
+        model = tf.keras.Sequential([
+            base_model,
+            global_average_layer,
+            # dense_layer,
+            prediction_layer
+        ])
+        return model
 
-result_batch = model.predict(image_batch)
-reloaded_result_batch = reloaded.predict(image_batch)
+    model = make_model_MobileNetV2()
+    model.summary()
+    model.compile(
+        optimizer=tf.keras.optimizers.Adam(),  # Consider others, e.g. RMSprop
+        loss=tf.keras.losses.BinaryCrossentropy(from_logits=True),
+        metrics=[tf.keras.metrics.BinaryAccuracy(), tf.keras.metrics.Precision(),
+                 tf.keras.metrics.Recall(),
+                 tf.keras.metrics.AUC()])  # tf.keras.metrics.Precision(), tf.keras.metrics.Recall()]
 
-abs(reloaded_result_batch - result_batch).max()
+    steps_per_train_epoch = np.ceil(training_data.samples / training_data.batch_size)
+    steps_per_val_epoch = np.ceil(validation_data.samples / validation_data.batch_size)
+    # batch_stats_callback = CollectBatchStats()
 
-""" TODO
-Add it under GitHub
-Make classes havily imbalanced, instroduce weighted loss
-Do it with few positive samples
-Introduce regularization, early stopping, lowering learning rate, resuming training
-Try different pre-trained models, also with fine-tuning
-"""
+    history = model.fit(training_data, epochs=EPOCHS,
+                        steps_per_epoch=steps_per_train_epoch,
+                        validation_data=validation_data,
+                        validation_steps=steps_per_val_epoch,
+                        verbose=1)
+
+    plot_history(history)
+    plt.show()
+
+    validation_samples = make_validation_generator(shuffle=True)
+
+    plot_classified_samples(validation_samples, training_data, model)
+    plt.show()
+
+    validation_data = make_validation_generator()
+
+    prediction = model.predict(validation_data, batch_size=validation_data.batch_size, verbose=1)
+    prediction = np.squeeze(prediction)
+    assert len(prediction) == len(validation_data.classes)
+    predicted_id = (np.squeeze(prediction) >= THETA).astype(int)
+    print('Accuracy on validation set', np.sum(validation_data.classes == predicted_id) / len(predicted_id))
+    print('F1 score on validation set', f1_score(validation_data.classes, predicted_id))
+    plot_auc(validation_data.classes, prediction)
+    plt.show()
+    plot_pr(validation_data.classes, prediction)
+    plt.show()
+
+    t = time.time()
+    export_path = "/tmp/saved_models/{}".format(int(t))
+    model.save(export_path, save_format='tf')
+    # reloaded = tf.keras.models.load_model(export_path)
+
+    """ TODO
+    Add it under GitHub
+    Make classes havily imbalanced, instroduce weighted loss
+    Do it with few positive samples
+    Introduce regularization, early stopping, lowering learning rate, resuming training
+    Try different pre-trained models, also with fine-tuning
+    """
+
+
+if __name__ == '__main__':
+    main()
