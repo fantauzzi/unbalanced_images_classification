@@ -9,14 +9,20 @@ import PIL.Image as Image
 from sklearn.metrics import roc_curve, auc, precision_recall_curve, average_precision_score, \
     plot_precision_recall_curve, f1_score, confusion_matrix, precision_score, recall_score, accuracy_score
 from sklearn.model_selection import train_test_split
+from tensorflow.keras.initializers import constant
+from tensorflow.keras.callbacks import ModelCheckpoint, EarlyStopping, ReduceLROnPlateau
+from pathlib import Path
 
 IMAGE_SIZE = (224, 224)
 IMG_SHAPE = (IMAGE_SIZE[0], IMAGE_SIZE[1], 3)
-EPOCHS = 2
+EPOCHS = 20
 BATCH_SIZE = 16
 VALIDATION_BATCH_SIZE = 64
 THETA = .5
 DATASET_ROOT = '/home/fanta/.keras/datasets/flower_photos'
+CHECKPOINTS_DIR = 'checkpoints'
+CHECKPOINTS_PATH = CHECKPOINTS_DIR + '/weights.{epoch:05d}.hdf5'
+count_to_be_dropped = 333
 
 
 def plot_metrics(history):
@@ -60,25 +66,26 @@ def plot_metrics(history):
     plt.subplots_adjust(wspace=.3, hspace=.3)
 
 
-def plot_classified_samples(validation_samples, training_data, model, theta=THETA):
-
+def plot_classified_samples(validation_samples, model=None, theta=THETA):
     for image_batch, label_batch in validation_samples:
         print("Image batch shape: ", image_batch.shape)
         print("Label batch shape: ", label_batch.shape)
         break
-    predicted_batch = model.predict(image_batch)
-    predicted_id = (np.squeeze(predicted_batch) >= theta).astype(int)
 
-    predicted_label_batch = np.array(['daisy' if item == 1 else 'not daisy' for item in predicted_id])
-    label_id = label_batch.astype(int)
+    if model is not None:
+        predicted_batch = model.predict(image_batch)
+        predicted_id = (np.squeeze(predicted_batch) >= theta).astype(int)
+        predicted_label_batch = np.array(['daisy' if item == 1 else 'not daisy' for item in predicted_id])
+        label_id = label_batch.astype(int)
 
     plt.figure(figsize=(10, 9))
     plt.subplots_adjust(hspace=0.5)
     for n in range(30):
         plt.subplot(6, 5, n + 1)
         plt.imshow(image_batch[n])
-        color = "green" if predicted_id[n] == label_id[n] else "red"
-        plt.title(predicted_label_batch[n], color=color)
+        if model is not None:
+            color = "green" if predicted_id[n] == label_id[n] else "red"
+            plt.title(predicted_label_batch[n], color=color)
         plt.axis('off')
     _ = plt.suptitle("Model predictions (green: correct, red: incorrect)")
 
@@ -122,6 +129,16 @@ def main():
         return the_class
 
     file_names_df['class'] = file_names_df['file_name'].map(map_it)
+
+    # Randomly select and drop the given number of samples with positive classification
+    if count_to_be_dropped > 0:
+        np.random.seed(41)
+        idx_to_be_dropped = np.random.choice(file_names_df[file_names_df['class'] == '1'].index,
+                                             size=count_to_be_dropped,
+                                             replace=False)
+        file_names_df = file_names_df.drop(idx_to_be_dropped)
+        file_names_df.reset_index(inplace=True, drop=True)
+
     training_df, validation_df = train_test_split(file_names_df, test_size=.2, stratify=file_names_df['class'])
     training_df.reset_index(inplace=True, drop=True)
     validation_df.reset_index(inplace=True, drop=True)
@@ -132,8 +149,14 @@ def main():
     training_df = training_df.astype({'class': 'int'})
     validation_df = validation_df.astype({'class': 'int'})
 
-    data_root = '/home/fanta/.keras/datasets/flower_photos_binary'
-    image_generator = tf.keras.preprocessing.image.ImageDataGenerator(rescale=1 / 255, validation_split=.2)
+    # data_root = '/home/fanta/.keras/datasets/flower_photos_binary'
+    image_generator = tf.keras.preprocessing.image.ImageDataGenerator(rescale=1 / 255)
+    """,
+   rotation_range=45,
+   shear_range=.2,
+   zoom_range=.3,
+   validation_split=.2)"""
+
     # TODO try other interpolations, e.g. bicubic
     training_data = image_generator.flow_from_dataframe(dataframe=training_df,
                                                         directory=DATASET_ROOT,
@@ -157,7 +180,11 @@ def main():
 
     validation_data = make_validation_generator()
 
-    def make_model_MobileNetV2():
+    visual_check_samples = make_validation_generator(shuffle=True)
+    plot_classified_samples(visual_check_samples)
+    plt.show()
+
+    def make_model_MobileNetV2(output_bias=None):
         base_model = tf.keras.applications.MobileNetV2(input_shape=IMG_SHAPE,
                                                        include_top=False,
                                                        weights='imagenet')
@@ -166,14 +193,21 @@ def main():
         model = tf.keras.Sequential([
             base_model,
             tf.keras.layers.GlobalAveragePooling2D(),  # TODO try with Flatten()
-            # tf.keras.layers.Dense(320, activation='relu')
-            tf.keras.layers.Dense(1, activation='sigmoid')
+            tf.keras.layers.Dense(1, activation='sigmoid', bias_initializer=output_bias)
             # With linear activation, fit() won't be able to compute precision and recall
         ])
         return model
 
-    model = make_model_MobileNetV2()
+    pos = np.sum(training_df['class'])
+    assert sum(training_data.labels) == pos
+    total = len(training_df)
+    assert training_data.samples == total
+    neg = total - pos
+    print("Count of samples in training dataset: positive=", pos, ' negative=', neg, ' total=', total, sep='')
+
+    model = make_model_MobileNetV2(constant(np.log([pos / neg])))
     model.summary()
+
     model.compile(
         optimizer=tf.keras.optimizers.Adam(),  # Consider others, e.g. RMSprop
         loss=tf.keras.losses.BinaryCrossentropy(from_logits=True),
@@ -181,13 +215,27 @@ def main():
                  tf.keras.metrics.Recall(),
                  tf.keras.metrics.AUC()])
 
+    '''Using restore_best_weights=False here because, even if set to True, it only works when early stopping actually 
+    kicked in, see https://github.com/keras-team/keras/issues/12511
+    To be sure to restore the best weights, will use the model saved by ModelCheckpoint() instead.'''
+    early_stopping_CB = EarlyStopping(monitor='val_loss',
+                                      # TODO this doesn't work correctly if there is L1 or L2 regularization
+                                      mode='min',
+                                      patience=10,
+                                      restore_best_weights=False)
+
+    checkpoint_CB = ModelCheckpoint(CHECKPOINTS_PATH,
+                                    monitor='val_loss',
+                                    verbose=1,
+                                    save_best_only=False,
+                                    save_weights_only=True)
+
+    callbacks = [checkpoint_CB]
+
     steps_per_train_epoch = np.ceil(training_data.samples / training_data.batch_size)
     steps_per_val_epoch = np.ceil(validation_data.samples / validation_data.batch_size)
 
     # Compute weights for unbalanced dataset
-    pos = np.sum(training_data.labels)
-    total = len(training_data.labels)
-    neg = total - pos
     # weight_for_0 = (1 / neg) * (total) / 2.0
     # weight_for_1 = (1 / pos) * (total) / 2.0
     weight_for_0 = 2 * pos / total
@@ -198,15 +246,32 @@ def main():
     print('Weight for class 0: {}'.format(weight_for_0))
     print('Weight for class 1: {}'.format(weight_for_1))
 
+    for file in Path(CHECKPOINTS_DIR).glob('*.hdf5'):
+        file.unlink()
+
     history = model.fit(training_data, epochs=EPOCHS,
                         steps_per_epoch=steps_per_train_epoch,
                         validation_data=validation_data,
                         validation_steps=steps_per_val_epoch,
                         class_weight=class_weight,
+                        callbacks=callbacks,
                         verbose=1)
 
     plot_metrics(history)
     plt.show()
+
+    # Before validation, reload the model with the best loss
+    precision_val = np.array(history.history['val_precision'])
+    recall_val = np.array(history.history['val_recall'])
+    epsilon = 1e-7
+    val_F1 = 2. * (precision_val * recall_val) / (precision_val + recall_val + epsilon)
+    best_epoch = np.argmax(val_F1) + 1  # Careful: if you change the metric, change min/max accordingly!
+    if best_epoch == len(history.history['val_loss']):
+        print('Best epoch is the last one, keeping it for validation')
+    else:
+        weights_file = CHECKPOINTS_PATH.format(epoch=best_epoch)
+        print('Loading weights from file', weights_file, 'corresponding to best epoch', best_epoch)
+        model.load_weights(weights_file)
 
     validation_data = make_validation_generator()
 
@@ -223,7 +288,7 @@ def main():
     plt.show()
 
     validation_samples = make_validation_generator(shuffle=True)
-    plot_classified_samples(validation_samples, training_data, model)
+    plot_classified_samples(validation_samples, model)
     plt.show()
 
     t = time.time()
@@ -232,10 +297,8 @@ def main():
     # reloaded = tf.keras.models.load_model(export_path)
 
     """ TODO
-    Introduce  bias_initializer=output_bias and check if it helps
-    Keep the model with the best value for one of the metrics (auc or F1) instead of the last one, and do the validation on that one
-    Make classes heavily imbalanced => switch to flow_from_dataframe
-    Do it with few positive samples
+    Make classes heavily imbalanced
+    Split chart for loss in two (tain and val)
     Introduce regularization, early stopping, lowering learning rate, resuming training
     try monitoring different metrics for early stopping, e.g. AUC or F1
     Try different pre-trained models, also with fine-tuning
