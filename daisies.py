@@ -12,7 +12,7 @@ from sklearn.model_selection import train_test_split
 
 IMAGE_SIZE = (224, 224)
 IMG_SHAPE = (IMAGE_SIZE[0], IMAGE_SIZE[1], 3)
-EPOCHS = 15
+EPOCHS = 2
 BATCH_SIZE = 16
 VALIDATION_BATCH_SIZE = 64
 THETA = .5
@@ -61,8 +61,6 @@ def plot_metrics(history):
 
 
 def plot_classified_samples(validation_samples, training_data, model, theta=THETA):
-    class_names = sorted(training_data.class_indices.items(), key=lambda pair: pair[1])
-    class_names = np.array([key.title() for key, value in class_names])
 
     for image_batch, label_batch in validation_samples:
         print("Image batch shape: ", image_batch.shape)
@@ -70,7 +68,8 @@ def plot_classified_samples(validation_samples, training_data, model, theta=THET
         break
     predicted_batch = model.predict(image_batch)
     predicted_id = (np.squeeze(predicted_batch) >= theta).astype(int)
-    predicted_label_batch = class_names[predicted_id]
+
+    predicted_label_batch = np.array(['daisy' if item == 1 else 'not daisy' for item in predicted_id])
     label_id = label_batch.astype(int)
 
     plt.figure(figsize=(10, 9))
@@ -79,7 +78,7 @@ def plot_classified_samples(validation_samples, training_data, model, theta=THET
         plt.subplot(6, 5, n + 1)
         plt.imshow(image_batch[n])
         color = "green" if predicted_id[n] == label_id[n] else "red"
-        plt.title(predicted_label_batch[n].title(), color=color)
+        plt.title(predicted_label_batch[n], color=color)
         plt.axis('off')
     _ = plt.suptitle("Model predictions (green: correct, red: incorrect)")
 
