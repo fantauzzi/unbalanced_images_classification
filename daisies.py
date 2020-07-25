@@ -120,7 +120,7 @@ def main():
 
     ''' Map the class labels to strings '1' and '0' because scikit-learn train_test_split() requires it to split
     the dataset with stratification (stratification throws an exception if class labels are numbers). '''
-    label_to_class = {'dandelion': '0', 'daisy': '1', 'roses': '0', 'sunflowers': '0', 'tulips': '0'}
+    label_to_class = {'dandelion': '0', 'daisy': '1', 'roses': '0', 'sunflowers': '0', 'tulips': '0', 'extras': '0'}
 
     def map_it(file_name):
         pos = file_name.index('/')
@@ -297,12 +297,14 @@ def main():
     # reloaded = tf.keras.models.load_model(export_path)
 
     """ TODO
-    Make classes heavily imbalanced
-    Split chart for loss in two (tain and val)
+    visualize misclassified samples
+    Split chart for loss in two (train and val)
+    introduce proper test set
     Introduce regularization, early stopping, lowering learning rate, resuming training
     try monitoring different metrics for early stopping, e.g. AUC or F1
-    Try different pre-trained models, also with fine-tuning
+    Try different pre-trained models, also with fine-tuning (densenet?)
     try validation with balanced classes
+    on chest x-ray only: augment positive samples
     """
 
 
