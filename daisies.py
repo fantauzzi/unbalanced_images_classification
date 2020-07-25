@@ -3,17 +3,20 @@ import tensorflow as tf
 import tensorflow_hub as hub
 from tensorflow.keras import layers
 import numpy as np
+import pandas as pd
 import time
 import PIL.Image as Image
 from sklearn.metrics import roc_curve, auc, precision_recall_curve, average_precision_score, \
     plot_precision_recall_curve, f1_score, confusion_matrix, precision_score, recall_score, accuracy_score
+from sklearn.model_selection import train_test_split
 
 IMAGE_SIZE = (224, 224)
 IMG_SHAPE = (IMAGE_SIZE[0], IMAGE_SIZE[1], 3)
-EPOCHS = 4
+EPOCHS = 15
 BATCH_SIZE = 16
 VALIDATION_BATCH_SIZE = 64
 THETA = .5
+DATASET_ROOT = '/home/fanta/.keras/datasets/flower_photos'
 
 
 def plot_metrics(history):
@@ -86,14 +89,14 @@ def plot_auc_and_pr(t_y, p_y):
 
     fpr, tpr, thresholds = roc_curve(t_y, p_y, pos_label=1)
     c_ax1.grid()
-    c_ax1.plot(fpr, tpr, label='%s (AUC:%0.2f)' % ('Dandelion', auc(fpr, tpr)))
+    c_ax1.plot(fpr, tpr, label='%s (AUC:%0.2f)' % ('Daisies', auc(fpr, tpr)))
     c_ax1.legend()
     c_ax1.set_xlabel('False Positive Rate')
     c_ax1.set_ylabel('True Positive Rate')
 
     precision, recall, thresholds = precision_recall_curve(t_y, p_y)
     c_ax2.grid()
-    c_ax2.plot(precision, recall, label='%s (AP Score:%0.2f)' % ('Dandelion', average_precision_score(t_y, p_y)))
+    c_ax2.plot(precision, recall, label='%s (AP Score:%0.2f)' % ('Daisies', average_precision_score(t_y, p_y)))
     c_ax2.legend()
     c_ax2.set_xlabel('Recall')
     c_ax2.set_ylabel('Precision')
@@ -107,23 +110,48 @@ def main():
       'flower_photos','https://storage.googleapis.com/download.tensorflow.org/example_images/flower_photos.tgz',
        untar=True)
     """
+    file_names_df = pd.read_csv('file_names.txt')
+
+    ''' Map the class labels to strings '1' and '0' because scikit-learn train_test_split() requires it to split
+    the dataset with stratification (stratification throws an exception if class labels are numbers). '''
+    label_to_class = {'dandelion': '0', 'daisy': '1', 'roses': '0', 'sunflowers': '0', 'tulips': '0'}
+
+    def map_it(file_name):
+        pos = file_name.index('/')
+        dir_name = file_name[:pos]
+        the_class = label_to_class[dir_name]
+        return the_class
+
+    file_names_df['class'] = file_names_df['file_name'].map(map_it)
+    training_df, validation_df = train_test_split(file_names_df, test_size=.2, stratify=file_names_df['class'])
+    training_df.reset_index(inplace=True, drop=True)
+    validation_df.reset_index(inplace=True, drop=True)
+
+    ''' Now convert the class labels to integers, as required for the class_mode 'raw' by flow_from_dataframe().
+    Using the class_mode 'raw' (and not 'binary') is a requirement for fit() to compute precision, recall and auc 
+    metrics correctly; fit() doesn't compute them correctly if class_mode is set to 'binary'. '''
+    training_df = training_df.astype({'class': 'int'})
+    validation_df = validation_df.astype({'class': 'int'})
 
     data_root = '/home/fanta/.keras/datasets/flower_photos_binary'
     image_generator = tf.keras.preprocessing.image.ImageDataGenerator(rescale=1 / 255, validation_split=.2)
     # TODO try other interpolations, e.g. bicubic
-    training_data = image_generator.flow_from_directory(str(data_root),
+    training_data = image_generator.flow_from_dataframe(dataframe=training_df,
+                                                        directory=DATASET_ROOT,
+                                                        x_col='file_name',
+                                                        y_col='class',
                                                         target_size=IMAGE_SIZE,
-                                                        class_mode='binary',
-                                                        classes=['non-daisy', 'daisy'],
-                                                        subset='training',
-                                                        batch_size=BATCH_SIZE)
+                                                        class_mode='raw',
+                                                        batch_size=BATCH_SIZE,
+                                                        shuffle=True)
 
     def make_validation_generator(shuffle=False):
-        validation_data = image_generator.flow_from_directory(str(data_root),
+        validation_data = image_generator.flow_from_dataframe(dataframe=validation_df,
+                                                              directory=DATASET_ROOT,
+                                                              x_col='file_name',
+                                                              y_col='class',
                                                               target_size=IMAGE_SIZE,
-                                                              class_mode='binary',
-                                                              classes=['non-daisy', 'daisy'],
-                                                              subset='validation',
+                                                              class_mode='raw',
                                                               batch_size=VALIDATION_BATCH_SIZE,
                                                               shuffle=shuffle)
         return validation_data
@@ -158,8 +186,8 @@ def main():
     steps_per_val_epoch = np.ceil(validation_data.samples / validation_data.batch_size)
 
     # Compute weights for unbalanced dataset
-    pos = np.sum(training_data.classes)
-    total = len(training_data.classes)
+    pos = np.sum(training_data.labels)
+    total = len(training_data.labels)
     neg = total - pos
     # weight_for_0 = (1 / neg) * (total) / 2.0
     # weight_for_1 = (1 / pos) * (total) / 2.0
@@ -175,29 +203,28 @@ def main():
                         steps_per_epoch=steps_per_train_epoch,
                         validation_data=validation_data,
                         validation_steps=steps_per_val_epoch,
-                        # class_weight=class_weight,
+                        class_weight=class_weight,
                         verbose=1)
 
     plot_metrics(history)
     plt.show()
 
-    validation_samples = make_validation_generator(shuffle=True)
-
-    # plot_classified_samples(validation_samples, training_data, model)
-    # plt.show()
-
     validation_data = make_validation_generator()
 
     prediction = model.predict(validation_data, batch_size=validation_data.batch_size, verbose=1)
     prediction = np.squeeze(prediction)
-    assert len(prediction) == len(validation_data.classes)
+    assert len(prediction) == len(validation_data.labels)
     predicted_id = (np.squeeze(prediction) >= THETA).astype(int)
     print('Metrics on validation set:')
-    print('   F1 score', f1_score(validation_data.classes, predicted_id))
-    print('   Precision', precision_score(validation_data.classes, predicted_id))
-    print('   Recall', recall_score(validation_data.classes, predicted_id))
-    print('   Accuracy', accuracy_score(validation_data.classes, predicted_id))
-    plot_auc_and_pr(validation_data.classes, prediction)
+    print('   F1 score', f1_score(validation_data.labels, predicted_id))
+    print('   Precision', precision_score(validation_data.labels, predicted_id))
+    print('   Recall', recall_score(validation_data.labels, predicted_id))
+    print('   Accuracy', accuracy_score(validation_data.labels, predicted_id))
+    plot_auc_and_pr(validation_data.labels, prediction)
+    plt.show()
+
+    validation_samples = make_validation_generator(shuffle=True)
+    plot_classified_samples(validation_samples, training_data, model)
     plt.show()
 
     t = time.time()
@@ -206,12 +233,13 @@ def main():
     # reloaded = tf.keras.models.load_model(export_path)
 
     """ TODO
-    Make classes heavily imbalanced, introduce weighted loss
+    Introduce  bias_initializer=output_bias and check if it helps
+    Keep the model with the best value for one of the metrics (auc or F1) instead of the last one, and do the validation on that one
+    Make classes heavily imbalanced => switch to flow_from_dataframe
     Do it with few positive samples
     Introduce regularization, early stopping, lowering learning rate, resuming training
-    Try different pre-trained models, also with fine-tuning
-    Introduce  bias_initializer=output_bias and check if it helps
     try monitoring different metrics for early stopping, e.g. AUC or F1
+    Try different pre-trained models, also with fine-tuning
     try validation with balanced classes
     """
 
