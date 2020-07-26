@@ -15,7 +15,7 @@ from pathlib import Path
 
 IMAGE_SIZE = (224, 224)
 IMG_SHAPE = (IMAGE_SIZE[0], IMAGE_SIZE[1], 3)
-EPOCHS = 20
+EPOCHS = 40
 BATCH_SIZE = 16
 VALIDATION_BATCH_SIZE = 64
 THETA = .5
@@ -31,40 +31,57 @@ def plot_metrics(history):
     epochs = [i + 1 for i in history.epoch]
     colors = plt.rcParams['axes.prop_cycle'].by_key()['color']
     metrics = ['loss', 'auc', 'precision', 'recall']
+    fig, axs = plt.subplots(3, 2)
     for n, metric in enumerate(metrics):
         name = metric.replace("_", " ").capitalize()
-        plt.subplot(3, 2, n + 1)
-        plt.grid(True)
-        plt.plot(epochs, history.history[metric], color=colors[0], linestyle="--", label='Train')
-        plt.plot(epochs, history.history['val_' + metric],
-                 color=colors[0], label='Val')
-        plt.xlabel('Epoch')
-        plt.ylabel(name)
+        plot_row = n // 2
+        plot_col = n - plot_row * 2
+        axs[plot_row, plot_col].grid(True, axis='x' if metric == 'loss' else 'both')
+        lns1 = axs[plot_row, plot_col].plot(epochs, history.history[metric], color=colors[0], linestyle="--",
+                                            label='Train')
+        if metric != 'loss':
+            axs[plot_row, plot_col].plot(epochs, history.history['val_' + metric], color=colors[0], label='Val')
+        axs[plot_row, plot_col].set_xlabel('Epoch')
+        axs[plot_row, plot_col].set_ylabel(name)
         if metric == 'loss':
-            plt.ylim([min(min(history.history['loss']), min(history.history['val_loss'])),
-                      max(max(history.history['loss']), max(history.history['val_loss']))])
+            loss_min, loss_max = min(history.history['loss']), max(history.history['loss'])
+            loss_range = loss_max - loss_min
+            val_loss_min, val_loss_max = min(history.history['val_loss']), max(history.history['val_loss'])
+            val_loss_range = val_loss_max - val_loss_min
+            gap = .05
+            axs[plot_row, plot_col].set_ylim([min(history.history['loss']) - loss_range * gap,
+                                              max(history.history['loss']) + loss_range * gap])
+            ax2 = axs[plot_row, plot_col].twinx()
+            ax2.set_ylim([min(history.history['val_loss']) - val_loss_range * gap,
+                          max(history.history['val_loss']) + val_loss_range * gap])
+            ax2.set_ylabel('Validation Loss')
+            lns2 = ax2.plot(epochs, history.history['val_' + metric], color=colors[0], label='Val')
+            lns = lns1 + lns2
+            labs = [l.get_label() for l in lns]
+            ax2.legend(lns, labs, loc=0)
         elif metric == 'auc':
-            plt.ylim([0.8, 1])
+            axs[plot_row, plot_col].set_ylim([0.8, 1])
         else:
-            plt.ylim([0, 1])
-        plt.xticks(epochs)
-        plt.legend()
-    plt.subplot(3, 2, 5)
+            axs[plot_row, plot_col].set_ylim([0, 1])
+        axs[plot_row, plot_col].set_xticks(epochs)
+        if metric != 'loss':
+            axs[plot_row, plot_col].legend()
+    plot_row, plot_col = 2, 0
     precision = np.array(history.history['precision'])
     recall = np.array(history.history['recall'])
     precision_val = np.array(history.history['val_precision'])
     recall_val = np.array(history.history['val_recall'])
     train_F1 = 2. * (precision * recall) / (precision + recall + epsilon)
     val_F1 = 2. * (precision_val * recall_val) / (precision_val + recall_val + epsilon)
-    plt.grid(True)
-    plt.plot(epochs, train_F1, color=colors[0], linestyle="--", label='Train')
-    plt.plot(epochs, val_F1, color=colors[0], label='Val')
-    plt.xlabel('Epoch')
-    plt.ylabel('F1')
-    plt.ylim([0, 1])
-    plt.xticks(epochs)
-    plt.legend()
-    plt.subplots_adjust(wspace=.3, hspace=.3)
+    axs[plot_row, plot_col].grid(True)
+    axs[plot_row, plot_col].plot(epochs, train_F1, color=colors[0], linestyle="--", label='Train')
+    axs[plot_row, plot_col].plot(epochs, val_F1, color=colors[0], label='Val')
+    axs[plot_row, plot_col].set_xlabel('Epoch')
+    axs[plot_row, plot_col].set_ylabel('F1')
+    axs[plot_row, plot_col].set_ylim([0, 1])
+    axs[plot_row, plot_col].set_xticks(epochs)
+    axs[plot_row, plot_col].legend()
+    fig.subplots_adjust(wspace=.3, hspace=.3)
 
 
 def plot_classified_samples(validation_samples, model=None, theta=THETA):
@@ -333,19 +350,14 @@ def main():
     plot_misclassified_samples(validation_samples, model)
     plt.show()
 
-    t = time.time()
-    export_path = "/tmp/saved_models/{}".format(int(t))
-    model.save(export_path, save_format='tf')
-    # reloaded = tf.keras.models.load_model(export_path)
-
     """ TODO
-    visualize misclassified samples
     Split chart for loss in two (train and val)
     introduce proper test set
     Introduce regularization, early stopping, lowering learning rate, resuming training
     try monitoring different metrics for early stopping, e.g. AUC or F1
     Try different pre-trained models, also with fine-tuning (densenet?)
     try validation with balanced classes
+    Implement explainability
     on chest x-ray only: augment positive samples
     """
 
