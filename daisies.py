@@ -198,15 +198,18 @@ def main():
         file_names_df = file_names_df.drop(idx_to_be_dropped)
         file_names_df.reset_index(inplace=True, drop=True)
 
-    training_df, validation_df = train_test_split(file_names_df, test_size=.2, stratify=file_names_df['class'])
+    training_df, test_df = train_test_split(file_names_df, test_size=.2, stratify=file_names_df['class'])
+    training_df, validation_df = train_test_split(training_df, test_size=.2, stratify=training_df['class'])
     training_df.reset_index(inplace=True, drop=True)
     validation_df.reset_index(inplace=True, drop=True)
+    test_df.reset_index(inplace=True, drop=True)
 
     ''' Now convert the class labels to integers, as required for the class_mode 'raw' by flow_from_dataframe().
     Using the class_mode 'raw' (and not 'binary') is a requirement for fit() to compute precision, recall and auc 
     metrics correctly; fit() doesn't compute them correctly if class_mode is set to 'binary'. '''
     training_df = training_df.astype({'class': 'int'})
     validation_df = validation_df.astype({'class': 'int'})
+    test_df = test_df.astype({'class': 'int'})
 
     # data_root = '/home/fanta/.keras/datasets/flower_photos_binary'
     image_generator = tf.keras.preprocessing.image.ImageDataGenerator(rescale=1 / 255)
@@ -236,6 +239,17 @@ def main():
                                                               batch_size=VALIDATION_BATCH_SIZE,
                                                               shuffle=shuffle)
         return validation_data
+
+    def make_test_generator():
+        test_data = image_generator.flow_from_dataframe(dataframe=test_df,
+                                                        directory=DATASET_ROOT,
+                                                        x_col='file_name',
+                                                        y_col='class',
+                                                        target_size=IMAGE_SIZE,
+                                                        class_mode='raw',
+                                                        batch_size=VALIDATION_BATCH_SIZE,
+                                                        shuffle=False)
+        return test_data
 
     validation_data = make_validation_generator()
 
@@ -295,12 +309,14 @@ def main():
     steps_per_val_epoch = np.ceil(validation_data.samples / validation_data.batch_size)
 
     # Compute weights for unbalanced dataset
-    # weight_for_0 = (1 / neg) * (total) / 2.0
-    # weight_for_1 = (1 / pos) * (total) / 2.0
     weight_for_0 = 2 * pos / total
     weight_for_1 = 2 * neg / total
-    # weight_for_0 = .5
-    # weight_for_1 = .5
+    # Weights from Tensorflow tutorial
+    # weight_for_0 = (1 / neg) * (total) / 2.0
+    # weight_for_1 = (1 / pos) * (total) / 2.0
+    # Equivalent to no weights
+    # weight_for_0 = 1
+    # weight_for_1 = 1
     class_weight = {0: weight_for_0, 1: weight_for_1}
     print('Weight for class 0: {}'.format(weight_for_0))
     print('Weight for class 1: {}'.format(weight_for_1))
@@ -332,18 +348,26 @@ def main():
         print('Loading weights from file', weights_file, 'corresponding to best epoch', best_epoch)
         model.load_weights(weights_file)
 
-    validation_data = make_validation_generator()
+    def print_metrics(samples, prediction):
+        prediction = np.squeeze(prediction)
+        assert len(prediction) == len(samples.labels)
+        predicted_id = (np.squeeze(prediction) >= THETA).astype(int)
+        print('   F1 score', f1_score(samples.labels, predicted_id))
+        print('   Precision', precision_score(samples.labels, predicted_id))
+        print('   Recall', recall_score(samples.labels, predicted_id))
+        print('   Accuracy', accuracy_score(samples.labels, predicted_id))
 
-    prediction = model.predict(validation_data, batch_size=validation_data.batch_size, verbose=1)
-    prediction = np.squeeze(prediction)
-    assert len(prediction) == len(validation_data.labels)
-    predicted_id = (np.squeeze(prediction) >= THETA).astype(int)
+    validation_data = make_validation_generator()
+    validation_prediction = model.predict(validation_data, batch_size=validation_data.batch_size, verbose=1)
     print('Metrics on validation set:')
-    print('   F1 score', f1_score(validation_data.labels, predicted_id))
-    print('   Precision', precision_score(validation_data.labels, predicted_id))
-    print('   Recall', recall_score(validation_data.labels, predicted_id))
-    print('   Accuracy', accuracy_score(validation_data.labels, predicted_id))
-    plot_auc_and_pr(validation_data.labels, prediction)
+    print_metrics(validation_data, validation_prediction)
+
+    test_data = make_test_generator()
+    test_prediction = model.predict(test_data, batch_size=test_data.batch_size, verbose=1)
+    print('Metrics on test set:')
+    print_metrics(test_data, test_prediction)
+
+    plot_auc_and_pr(test_data.labels, test_prediction)
     plt.show()
 
     validation_samples = make_validation_generator(shuffle=True)
@@ -351,8 +375,6 @@ def main():
     plt.show()
 
     """ TODO
-    Split chart for loss in two (train and val)
-    introduce proper test set
     Introduce regularization, early stopping, lowering learning rate, resuming training
     try monitoring different metrics for early stopping, e.g. AUC or F1
     Try different pre-trained models, also with fine-tuning (densenet?)
