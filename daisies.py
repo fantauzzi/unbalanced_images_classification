@@ -12,9 +12,10 @@ from sklearn.model_selection import train_test_split
 from tensorflow.keras.initializers import constant
 from tensorflow.keras.callbacks import ModelCheckpoint, EarlyStopping, ReduceLROnPlateau
 from pathlib import Path
+from tensorflow.keras.applications.densenet import DenseNet121
 
 IMAGE_SIZE = (224, 224)
-IMG_SHAPE = (IMAGE_SIZE[0], IMAGE_SIZE[1], 3)
+IMAGE_SHAPE = (IMAGE_SIZE[0], IMAGE_SIZE[1], 3)
 EPOCHS = 40
 BATCH_SIZE = 16
 VALIDATION_BATCH_SIZE = 64
@@ -258,7 +259,7 @@ def main():
     plt.show()
 
     def make_model_MobileNetV2(output_bias=None):
-        base_model = tf.keras.applications.MobileNetV2(input_shape=IMG_SHAPE,
+        base_model = tf.keras.applications.MobileNetV2(input_shape=IMAGE_SHAPE,
                                                        include_top=False,
                                                        weights='imagenet')
         for layer in base_model.layers:
@@ -271,6 +272,17 @@ def main():
         ])
         return model
 
+    def make_model_DenseNet121(output_bias=None):
+        base_model = DenseNet121(include_top=False, pooling='avg', weights='imagenet', input_shape=IMAGE_SHAPE)
+        for layer in base_model.layers:
+            layer.trainable = False
+        model = tf.keras.Sequential([
+            base_model,
+            tf.keras.layers.Dense(1, activation='sigmoid', bias_initializer=output_bias)
+            # With linear activation, fit() won't be able to compute precision and recall
+        ])
+        return model
+
     pos = np.sum(training_df['class'])
     assert sum(training_data.labels) == pos
     total = len(training_df)
@@ -278,7 +290,7 @@ def main():
     neg = total - pos
     print("Count of samples in training dataset: positive=", pos, ' negative=', neg, ' total=', total, sep='')
 
-    model = make_model_MobileNetV2(constant(np.log([pos / neg])))
+    model = make_model_DenseNet121(constant(np.log([pos / neg])))
     model.summary()
 
     model.compile(
@@ -375,9 +387,10 @@ def main():
     plt.show()
 
     """ TODO
+    Try different pre-trained models, also with fine-tuning (densenet?)
+    Fix xr curve scale
     Introduce regularization, early stopping, lowering learning rate, resuming training
     try monitoring different metrics for early stopping, e.g. AUC or F1
-    Try different pre-trained models, also with fine-tuning (densenet?)
     try validation with balanced classes
     Implement explainability
     on chest x-ray only: augment positive samples
