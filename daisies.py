@@ -22,7 +22,8 @@ THETA = .5
 DATASET_ROOT = '/home/fanta/.keras/datasets/flower_photos'
 CHECKPOINTS_DIR = 'checkpoints'
 CHECKPOINTS_PATH = CHECKPOINTS_DIR + '/weights.{epoch:05d}.hdf5'
-count_to_be_dropped = 333
+count_to_be_dropped = 0
+use_extended_dataset = False
 
 
 def plot_metrics(history):
@@ -90,6 +91,41 @@ def plot_classified_samples(validation_samples, model=None, theta=THETA):
     _ = plt.suptitle("Model predictions (green: correct, red: incorrect)")
 
 
+def plot_misclassified_samples(validation_samples, model, theta=THETA):
+    max_to_be_plotted = 30
+    to_be_plotted = []
+    to_be_plotted_label = []
+    # Find the first max_to_be_plotted images that are misclassified by the model
+    steps = np.ceil(validation_samples.samples / validation_samples.batch_size)
+    for image_batch, label_batch in validation_samples:
+        if validation_samples.total_batches_seen > steps:
+            break
+        predicted_batch = model.predict(image_batch)
+        predicted_batch_id = (np.squeeze(predicted_batch) >= theta).astype(int)
+        label_batch_id = label_batch.astype(int)
+        correct_label_batch = np.array(['daisy' if item == 1 else 'not daisy' for item in label_batch_id])
+        assert len(image_batch) == len(predicted_batch_id)
+        assert len(correct_label_batch) == len(image_batch)
+        assert len(predicted_batch_id) == len(label_batch_id)
+        for i in range(len(image_batch)):
+            if predicted_batch_id[i] != label_batch_id[i]:
+                to_be_plotted.append(image_batch[i])
+                to_be_plotted_label.append(correct_label_batch[i])
+                if len(to_be_plotted) == max_to_be_plotted:
+                    break
+        if len(to_be_plotted) == max_to_be_plotted:
+            break
+
+    plt.figure(figsize=(10, 9))
+    plt.subplots_adjust(hspace=0.5)
+    for n in range(len(to_be_plotted)):
+        plt.subplot(6, 5, n + 1)
+        plt.imshow(to_be_plotted[n])
+        plt.title(to_be_plotted_label[n])
+        plt.axis('off')
+    _ = plt.suptitle("Sample of misclassified images with their correct classification")
+
+
 def plot_auc_and_pr(t_y, p_y):
     fig, (c_ax1, c_ax2) = plt.subplots(ncols=2, figsize=(8, 4))
 
@@ -127,6 +163,12 @@ def main():
         dir_name = file_name[:pos]
         the_class = label_to_class[dir_name]
         return the_class
+
+    # Drop samples of the extended flowers
+    # dataset if they are not wanted
+    if not use_extended_dataset:
+        entry_ids = file_names_df[file_names_df['file_name'].str.contains('extras/')].index
+        file_names_df = file_names_df.drop(entry_ids)
 
     file_names_df['class'] = file_names_df['file_name'].map(map_it)
 
@@ -288,7 +330,7 @@ def main():
     plt.show()
 
     validation_samples = make_validation_generator(shuffle=True)
-    plot_classified_samples(validation_samples, model)
+    plot_misclassified_samples(validation_samples, model)
     plt.show()
 
     t = time.time()
