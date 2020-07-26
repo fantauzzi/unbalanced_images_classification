@@ -16,7 +16,7 @@ from tensorflow.keras.applications.densenet import DenseNet121
 
 IMAGE_SIZE = (224, 224)
 IMAGE_SHAPE = (IMAGE_SIZE[0], IMAGE_SIZE[1], 3)
-EPOCHS = 40
+EPOCHS = 30
 BATCH_SIZE = 16
 VALIDATION_BATCH_SIZE = 64
 THETA = .5
@@ -24,7 +24,7 @@ DATASET_ROOT = '/home/fanta/.keras/datasets/flower_photos'
 CHECKPOINTS_DIR = 'checkpoints'
 CHECKPOINTS_PATH = CHECKPOINTS_DIR + '/weights.{epoch:05d}.hdf5'
 count_to_be_dropped = 0
-use_extended_dataset = False
+use_extended_dataset = True
 
 
 def plot_metrics(history):
@@ -145,22 +145,56 @@ def plot_misclassified_samples(validation_samples, model, theta=THETA):
 
 
 def plot_auc_and_pr(t_y, p_y):
-    fig, (c_ax1, c_ax2) = plt.subplots(ncols=2, figsize=(8, 4))
+    fig, axs = plt.subplots(nrows=2, ncols=2, figsize=(8, 8))
 
     fpr, tpr, thresholds = roc_curve(t_y, p_y, pos_label=1)
-    c_ax1.grid()
-    c_ax1.plot(fpr, tpr, label='%s (AUC:%0.2f)' % ('Daisies', auc(fpr, tpr)))
-    c_ax1.legend()
-    c_ax1.set_xlabel('False Positive Rate')
-    c_ax1.set_ylabel('True Positive Rate')
+    ax = axs[0, 0]
+    ax.grid()
+    ax.plot(fpr, tpr, label='%s (AUC:%0.2f)' % ('Daisies', auc(fpr, tpr)))
+    ax.legend()
+    ax.set_xlabel('False Positive Rate')
+    ax.set_ylabel('True Positive Rate')
 
     precision, recall, thresholds = precision_recall_curve(t_y, p_y)
-    c_ax2.grid()
-    c_ax2.plot(precision, recall, label='%s (AP Score:%0.2f)' % ('Daisies', average_precision_score(t_y, p_y)))
-    c_ax2.legend()
-    c_ax2.set_xlabel('Recall')
-    c_ax2.set_ylabel('Precision')
+    ax = axs[1, 0]
+    ax.set_xlim([-.05, 1.05])
+    ax.set_ylim([-.05, 1.05])
+    ax.grid()
+    ax.plot(precision, recall, label='%s (AP Score:%0.2f)' % ('Daisies', average_precision_score(t_y, p_y)))
+    ax.legend()
+    ax.set_xlabel('Recall')
+    ax.set_ylabel('Precision')
 
+    thresholds = np.linspace(.0, 1., num=21)
+    f1_range = np.zeros_like(thresholds, dtype=float)
+    precision_range = np.zeros_like(thresholds, dtype=float)
+    recall_range = np.zeros_like(thresholds, dtype=float)
+    for i, theta in enumerate(thresholds):
+        predicted_id = (np.squeeze(p_y) >= theta).astype(int)
+        f1_range[i] = f1_score(t_y, predicted_id)
+        precision_range[i] = precision_score(t_y, predicted_id)
+        recall_range[i] = recall_score(t_y, predicted_id)
+
+    ax = axs[0, 1]
+    ax.set_ylim([-.05, 1.05])
+    ax.grid()
+    lns1 = ax.plot(thresholds, precision_range, color='blue', label='Precision')
+    ax.set_xlabel('Threshold')
+    ax.set_ylabel('Precision')
+    ax2= ax.twinx()
+    ax2.set_ylim([-.05, 1.05])
+    ax2.set_ylabel('Recall')
+    lns2 = ax2.plot(thresholds, recall_range, color='red', label='Recall')
+    lns = lns1 + lns2
+    labs = [l.get_label() for l in lns]
+    ax2.legend(lns, labs, loc = 'lower center')
+
+    ax = axs[1, 1]
+    ax.set_ylim([-.05, 1.05])
+    ax.grid()
+    ax.plot(thresholds, f1_range, color='blue')
+    ax.set_xlabel('Threshold')
+    ax.set_ylabel('F1')
 
 def main():
     # classifier_url = "https://tfhub.dev/google/tf2-preview/mobilenet_v2/classification/2"  # @param {type:"string"}
@@ -352,7 +386,9 @@ def main():
     recall_val = np.array(history.history['val_recall'])
     epsilon = 1e-7
     val_F1 = 2. * (precision_val * recall_val) / (precision_val + recall_val + epsilon)
-    best_epoch = np.argmax(val_F1) + 1  # Careful: if you change the metric, change min/max accordingly!
+    # Careful: if you change the choice of metric below, change min/max accordingly!
+    # best_epoch = np.argmax(val_F1) + 1
+    best_epoch = np.argmin(history.history['val_loss']) + 1
     if best_epoch == len(history.history['val_loss']):
         print('Best epoch is the last one, keeping it for validation')
     else:
@@ -387,13 +423,14 @@ def main():
     plt.show()
 
     """ TODO
+    Chart of precision and recall Vs. threshold, F1 Vs. threshold
     Try different pre-trained models, also with fine-tuning (densenet?)
-    Fix xr curve scale
     Introduce regularization, early stopping, lowering learning rate, resuming training
     try monitoring different metrics for early stopping, e.g. AUC or F1
     try validation with balanced classes
     Implement explainability
     on chest x-ray only: augment positive samples
+    Framework to automate experiments
     """
 
 
