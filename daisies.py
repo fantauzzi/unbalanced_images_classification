@@ -16,15 +16,15 @@ from tensorflow.keras.applications.densenet import DenseNet121
 
 IMAGE_SIZE = (224, 224)
 IMAGE_SHAPE = (IMAGE_SIZE[0], IMAGE_SIZE[1], 3)
-EPOCHS = 20
-BATCH_SIZE = 16
+EPOCHS = 40
+BATCH_SIZE = 24
 VALIDATION_BATCH_SIZE = 64
 THETA = .5
-DATASET_ROOT = '/home/fanta/.keras/datasets/flower_photos'
+DATASET_ROOT = '/home/fanta/.keras/datasets/102flowers/jpg'
 CHECKPOINTS_DIR = 'checkpoints'
 CHECKPOINTS_PATH = CHECKPOINTS_DIR + '/weights.{epoch:05d}.hdf5'
 count_to_be_dropped = 0
-use_extended_dataset = True
+use_extended_dataset = False
 NP_SEED = 31
 TF_SEED = 32
 
@@ -210,25 +210,58 @@ def main():
       'flower_photos','https://storage.googleapis.com/download.tensorflow.org/example_images/flower_photos.tgz',
        untar=True)
     """
-    file_names_df = pd.read_csv('file_names.txt')
 
-    ''' Map the class labels to strings '1' and '0' because scikit-learn train_test_split() requires it to split
-    the dataset with stratification (stratification throws an exception if class labels are numbers). '''
-    label_to_class = {'dandelion': '0', 'daisy': '1', 'roses': '0', 'sunflowers': '0', 'tulips': '0', 'extras': '0'}
+    def load_dataset_1(file_name):
+        file_names_df = pd.read_csv(file_name)
 
-    def map_it(file_name):
-        pos = file_name.index('/')
-        dir_name = file_name[:pos]
-        the_class = label_to_class[dir_name]
-        return the_class
+        ''' Map the class labels to strings '1' and '0' because scikit-learn train_test_split() requires it to split
+        the dataset with stratification (stratification throws an exception if class labels are numbers). '''
+        label_to_class = {'dandelion': '0', 'daisy': '1', 'roses': '0', 'sunflowers': '0', 'tulips': '0', 'extras': '0'}
 
-    # Drop samples of the extended flowers
-    # dataset if they are not wanted
-    if not use_extended_dataset:
-        entry_ids = file_names_df[file_names_df['file_name'].str.contains('extras/')].index
-        file_names_df = file_names_df.drop(entry_ids)
+        def map_it(file_name):
+            pos = file_name.index('/')
+            dir_name = file_name[:pos]
+            the_class = label_to_class[dir_name]
+            return the_class
 
-    file_names_df['class'] = file_names_df['file_name'].map(map_it)
+        # Drop samples of the extended flowers
+        # dataset if they are not wanted
+        if not use_extended_dataset:
+            entry_ids = file_names_df[file_names_df['file_name'].str.contains('extras/')].index
+            file_names_df = file_names_df.drop(entry_ids)
+
+        file_names_df['class'] = file_names_df['file_name'].map(map_it)
+
+        return file_names_df
+
+    def load_dataset_2(file_name):
+        file_names_df = pd.read_csv(file_name)
+
+        ''' Map the class labels to strings '1' and '0' because scikit-learn train_test_split() requires label classes
+         to be strings, in order to split the dataset with stratification (stratification throws an exception if class 
+         labels are numbers). '''
+
+        file_names_df['class'] = file_names_df['multi_class'].map(lambda x: '1' if x == 51 else '0')
+        file_names_df.drop(columns=['multi_class'], inplace=True)
+
+        return file_names_df
+
+    def load_augmented_dataset(file_name):
+        file_names_df = pd.read_csv(file_name)
+
+        ''' Map the class labels to strings '1' and '0' because scikit-learn train_test_split() requires label classes
+         to be strings, in order to split the dataset with stratification (stratification throws an exception if class 
+         labels are numbers). '''
+
+        file_names_df.drop(columns=['label'], inplace=True)
+        file_names_df['class'] = '1'
+
+        return file_names_df
+
+    file_names_df = load_dataset_2('flower_classes.csv')
+    file_names_augmented_df = load_augmented_dataset('augmented.csv')
+    file_names_df = pd.concat([file_names_df, file_names_augmented_df], axis='rows')
+    file_names_df.reset_index(inplace=True, drop=True)
 
     # Randomly select and drop the given number of samples with positive classification
     if count_to_be_dropped > 0:
@@ -238,8 +271,8 @@ def main():
         file_names_df = file_names_df.drop(idx_to_be_dropped)
         file_names_df.reset_index(inplace=True, drop=True)
 
-    training_df, test_df = train_test_split(file_names_df, test_size=.2, stratify=file_names_df['class'])
-    training_df, validation_df = train_test_split(training_df, test_size=.2, stratify=training_df['class'])
+    training_df, test_df = train_test_split(file_names_df, test_size=.15, stratify=file_names_df['class'])
+    training_df, validation_df = train_test_split(training_df, test_size=.15/.85, stratify=training_df['class'])
     training_df.reset_index(inplace=True, drop=True)
     validation_df.reset_index(inplace=True, drop=True)
     test_df.reset_index(inplace=True, drop=True)
