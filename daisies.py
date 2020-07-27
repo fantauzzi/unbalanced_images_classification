@@ -16,7 +16,7 @@ from tensorflow.keras.applications.densenet import DenseNet121
 
 IMAGE_SIZE = (224, 224)
 IMAGE_SHAPE = (IMAGE_SIZE[0], IMAGE_SIZE[1], 3)
-EPOCHS = 30
+EPOCHS = 20
 BATCH_SIZE = 16
 VALIDATION_BATCH_SIZE = 64
 THETA = .5
@@ -25,6 +25,8 @@ CHECKPOINTS_DIR = 'checkpoints'
 CHECKPOINTS_PATH = CHECKPOINTS_DIR + '/weights.{epoch:05d}.hdf5'
 count_to_be_dropped = 0
 use_extended_dataset = True
+NP_SEED = 31
+TF_SEED = 32
 
 
 def plot_metrics(history):
@@ -181,13 +183,13 @@ def plot_auc_and_pr(t_y, p_y):
     lns1 = ax.plot(thresholds, precision_range, color='blue', label='Precision')
     ax.set_xlabel('Threshold')
     ax.set_ylabel('Precision')
-    ax2= ax.twinx()
+    ax2 = ax.twinx()
     ax2.set_ylim([-.05, 1.05])
     ax2.set_ylabel('Recall')
     lns2 = ax2.plot(thresholds, recall_range, color='red', label='Recall')
     lns = lns1 + lns2
     labs = [l.get_label() for l in lns]
-    ax2.legend(lns, labs, loc = 'lower center')
+    ax2.legend(lns, labs, loc='lower center')
 
     ax = axs[1, 1]
     ax.set_ylim([-.05, 1.05])
@@ -196,7 +198,11 @@ def plot_auc_and_pr(t_y, p_y):
     ax.set_xlabel('Threshold')
     ax.set_ylabel('F1')
 
+
 def main():
+    np.random.seed(NP_SEED)
+    tf.random.set_seed(TF_SEED)
+
     # classifier_url = "https://tfhub.dev/google/tf2-preview/mobilenet_v2/classification/2"  # @param {type:"string"}
 
     """
@@ -226,7 +232,6 @@ def main():
 
     # Randomly select and drop the given number of samples with positive classification
     if count_to_be_dropped > 0:
-        np.random.seed(41)
         idx_to_be_dropped = np.random.choice(file_names_df[file_names_df['class'] == '1'].index,
                                              size=count_to_be_dropped,
                                              replace=False)
@@ -273,6 +278,7 @@ def main():
                                                               class_mode='raw',
                                                               batch_size=VALIDATION_BATCH_SIZE,
                                                               shuffle=shuffle)
+
         return validation_data
 
     def make_test_generator():
@@ -284,6 +290,7 @@ def main():
                                                         class_mode='raw',
                                                         batch_size=VALIDATION_BATCH_SIZE,
                                                         shuffle=False)
+
         return test_data
 
     validation_data = make_validation_generator()
@@ -325,6 +332,7 @@ def main():
     print("Count of samples in training dataset: positive=", pos, ' negative=', neg, ' total=', total, sep='')
 
     model = make_model_DenseNet121(constant(np.log([pos / neg])))
+    # model = make_model_MobileNetV2(constant(np.log([pos / neg])))
     model.summary()
 
     model.compile(
@@ -423,8 +431,7 @@ def main():
     plt.show()
 
     """ TODO
-    Chart of precision and recall Vs. threshold, F1 Vs. threshold
-    Try different pre-trained models, also with fine-tuning (densenet?)
+    Try different pre-trained models, also with fine-tuning (densenet)
     Introduce regularization, early stopping, lowering learning rate, resuming training
     try monitoring different metrics for early stopping, e.g. AUC or F1
     try validation with balanced classes
