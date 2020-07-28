@@ -1,10 +1,13 @@
 import matplotlib.pylab as plt
+import random
+# plt.ion()
+print('Using',plt.get_backend(),'as graphics backend.')
 import tensorflow as tf
 import tensorflow_hub as hub
 from tensorflow.keras import layers
 import numpy as np
 import pandas as pd
-import time
+from time import time
 import PIL.Image as Image
 from sklearn.metrics import roc_curve, auc, precision_recall_curve, average_precision_score, \
     plot_precision_recall_curve, f1_score, confusion_matrix, precision_score, recall_score, accuracy_score
@@ -16,7 +19,7 @@ from tensorflow.keras.applications.densenet import DenseNet121
 
 IMAGE_SIZE = (224, 224)
 IMAGE_SHAPE = (IMAGE_SIZE[0], IMAGE_SIZE[1], 3)
-EPOCHS = 40
+EPOCHS = 2
 BATCH_SIZE = 24
 VALIDATION_BATCH_SIZE = 64
 THETA = .5
@@ -25,8 +28,14 @@ CHECKPOINTS_DIR = 'checkpoints'
 CHECKPOINTS_PATH = CHECKPOINTS_DIR + '/weights.{epoch:05d}.hdf5'
 count_to_be_dropped = 0
 use_extended_dataset = False
-NP_SEED = 31
-TF_SEED = 32
+PY_SEED = 44
+NP_SEED = 43
+TF_SEED = 42
+AUGMENTATION = 2
+TARGET_SUBDIR = 'augmented'
+AUGMENTATION_TARGET_DIR = DATASET_ROOT + '/' + TARGET_SUBDIR
+AUGMENTATION_BATCH_SIZE = 64
+aug_metadata_file_name = 'augmented.csv'
 
 
 def plot_metrics(history):
@@ -199,9 +208,55 @@ def plot_auc_and_pr(t_y, p_y):
     ax.set_ylabel('F1')
 
 
+def augment_positive_samples(file_names_df, output_file_name):
+    file_names_df = file_names_df[file_names_df['class'] == '1']
+    # print('Loaded information for', len(file_names_df), 'files with positive samples.')
+    print('Making', AUGMENTATION, 'new samples for every positive sample.')
+
+    for file in Path(AUGMENTATION_TARGET_DIR).glob('*.png'):
+        file.unlink()
+
+    image_generator = tf.keras.preprocessing.image.ImageDataGenerator(rotation_range=90,
+                                                                      shear_range=.2,
+                                                                      zoom_range=(.75, 1.20),
+                                                                      brightness_range=(.7, 1.2))
+
+    # TODO try other interpolations, e.g. bicubic
+    generated_data = image_generator.flow_from_dataframe(dataframe=file_names_df,
+                                                         directory=DATASET_ROOT,
+                                                         save_to_dir=AUGMENTATION_TARGET_DIR,
+                                                         target_size=IMAGE_SIZE,
+                                                         x_col='file_name',
+                                                         y_col='class',
+                                                         class_mode='raw',
+                                                         batch_size=AUGMENTATION_BATCH_SIZE,
+                                                         shuffle=False)
+    wanted_batches = int(AUGMENTATION * np.ceil(generated_data.samples / generated_data.batch_size))
+    generated_images_count = 0
+    for image_batch, label_batch in generated_data:
+        assert sum(label_batch=='1') == len(image_batch)
+        generated_images_count += len(image_batch)
+        print('.', end='', flush=True)
+        if generated_data.total_batches_seen == wanted_batches:
+            break
+    print('\nGenerated', generated_images_count, 'images in', AUGMENTATION_TARGET_DIR)
+
+    new_rows = []
+    with open(output_file_name, 'w') as target_file:
+        target_file.write('file_name,label,class\n')
+        for file_name in Path(AUGMENTATION_TARGET_DIR).glob('*.png'):
+            to_be_written = TARGET_SUBDIR + '/' + str(file_name.name)
+            target_file.write(to_be_written + ',51\n')
+            new_rows.append({'file_name': to_be_written, 'class': '1'})
+    print('Written metadata file', aug_metadata_file_name)
+    metadata_df = pd.DataFrame(new_rows)
+    return metadata_df
+
+
 def main():
     np.random.seed(NP_SEED)
     tf.random.set_seed(TF_SEED)
+    random.seed(PY_SEED)
 
     # classifier_url = "https://tfhub.dev/google/tf2-preview/mobilenet_v2/classification/2"  # @param {type:"string"}
 
@@ -246,7 +301,7 @@ def main():
 
         return file_names_df
 
-    def load_augmented_dataset(file_name):
+    """def load_augmented_dataset(file_name):
         file_names_df = pd.read_csv(file_name)
 
         ''' Map the class labels to strings '1' and '0' because scikit-learn train_test_split() requires label classes
@@ -256,12 +311,9 @@ def main():
         file_names_df.drop(columns=['label'], inplace=True)
         file_names_df['class'] = '1'
 
-        return file_names_df
+        return file_names_df"""
 
     file_names_df = load_dataset_2('flower_classes.csv')
-    file_names_augmented_df = load_augmented_dataset('augmented.csv')
-    file_names_df = pd.concat([file_names_df, file_names_augmented_df], axis='rows')
-    file_names_df.reset_index(inplace=True, drop=True)
 
     # Randomly select and drop the given number of samples with positive classification
     if count_to_be_dropped > 0:
@@ -272,7 +324,10 @@ def main():
         file_names_df.reset_index(inplace=True, drop=True)
 
     training_df, test_df = train_test_split(file_names_df, test_size=.15, stratify=file_names_df['class'])
-    training_df, validation_df = train_test_split(training_df, test_size=.15/.85, stratify=training_df['class'])
+    training_df, validation_df = train_test_split(training_df, test_size=.15 / .85, stratify=training_df['class'])
+    if AUGMENTATION != 0:
+        file_names_augmented_df = augment_positive_samples(file_names_df=training_df, output_file_name=aug_metadata_file_name)
+        training_df = pd.concat([training_df, file_names_augmented_df], axis='rows')
     training_df.reset_index(inplace=True, drop=True)
     validation_df.reset_index(inplace=True, drop=True)
     test_df.reset_index(inplace=True, drop=True)
@@ -331,6 +386,10 @@ def main():
     visual_check_samples = make_validation_generator(shuffle=True)
     plot_classified_samples(visual_check_samples)
     plt.show()
+    # plt.draw()
+    # plt.pause(.01)
+
+    start_time = time()
 
     def make_model_MobileNetV2(output_bias=None):
         base_model = tf.keras.applications.MobileNetV2(input_shape=IMAGE_SHAPE,
@@ -348,10 +407,12 @@ def main():
 
     def make_model_DenseNet121(output_bias=None):
         base_model = DenseNet121(include_top=False, pooling='avg', weights='imagenet', input_shape=IMAGE_SHAPE)
+        # for layer in base_model.layers[0:313]:
         for layer in base_model.layers:
             layer.trainable = False
         model = tf.keras.Sequential([
             base_model,
+            tf.keras.layers.Dense(256, activation='relu'),
             tf.keras.layers.Dense(1, activation='sigmoid', bias_initializer=output_bias)
             # With linear activation, fit() won't be able to compute precision and recall
         ])
@@ -421,6 +482,8 @@ def main():
 
     plot_metrics(history)
     plt.show()
+    # plt.draw()
+    # plt.pause(.01)
 
     # Before validation, reload the model with the best loss
     precision_val = np.array(history.history['val_precision'])
@@ -456,14 +519,27 @@ def main():
     print('Metrics on test set:')
     print_metrics(test_data, test_prediction)
 
+    end_time = time()
+    elapsed= int(end_time - start_time)
+    print('Completed in {} minutes and {} seconds'.format(elapsed // 60, elapsed % 60 ))
+
+
     plot_auc_and_pr(test_data.labels, test_prediction)
     plt.show()
+    # plt.draw()
+    # plt.pause(.01)
 
     validation_samples = make_validation_generator(shuffle=True)
     plot_misclassified_samples(validation_samples, model)
     plt.show()
+    # plt.draw()
+    # plt.pause(.01)
+
+    # input('Press [Enter] to close charts and end the program.')
 
     """ TODO
+    Ensure augmented images are in the training set only, and they augment other images of the training set only
+    Add timer for training time
     Try different pre-trained models, also with fine-tuning (densenet)
     Introduce regularization, early stopping, lowering learning rate, resuming training
     try monitoring different metrics for early stopping, e.g. AUC or F1
