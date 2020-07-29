@@ -1,7 +1,8 @@
 import matplotlib.pylab as plt
 import random
+
 # plt.ion()
-print('Using',plt.get_backend(),'as graphics backend.')
+print('Using', plt.get_backend(), 'as graphics backend.')
 import tensorflow as tf
 import tensorflow_hub as hub
 from tensorflow.keras import layers
@@ -19,7 +20,7 @@ from tensorflow.keras.applications.densenet import DenseNet121
 
 IMAGE_SIZE = (224, 224)
 IMAGE_SHAPE = (IMAGE_SIZE[0], IMAGE_SIZE[1], 3)
-EPOCHS = 2
+EPOCHS = 30
 BATCH_SIZE = 24
 VALIDATION_BATCH_SIZE = 64
 THETA = .5
@@ -31,11 +32,12 @@ use_extended_dataset = False
 PY_SEED = 44
 NP_SEED = 43
 TF_SEED = 42
-AUGMENTATION = 2
+AUGMENTATION = 3
 TARGET_SUBDIR = 'augmented'
 AUGMENTATION_TARGET_DIR = DATASET_ROOT + '/' + TARGET_SUBDIR
 AUGMENTATION_BATCH_SIZE = 64
 aug_metadata_file_name = 'augmented.csv'
+test_set_fraction = .2
 
 
 def plot_metrics(history):
@@ -234,7 +236,7 @@ def augment_positive_samples(file_names_df, output_file_name):
     wanted_batches = int(AUGMENTATION * np.ceil(generated_data.samples / generated_data.batch_size))
     generated_images_count = 0
     for image_batch, label_batch in generated_data:
-        assert sum(label_batch=='1') == len(image_batch)
+        assert sum(label_batch == '1') == len(image_batch)
         generated_images_count += len(image_batch)
         print('.', end='', flush=True)
         if generated_data.total_batches_seen == wanted_batches:
@@ -253,6 +255,72 @@ def augment_positive_samples(file_names_df, output_file_name):
     return metadata_df
 
 
+def load_dataset_1(file_name):
+    file_names_df = pd.read_csv(file_name)
+
+    ''' Map the class labels to strings '1' and '0' because scikit-learn train_test_split() requires it to split
+    the dataset with stratification (stratification throws an exception if class labels are numbers). '''
+    label_to_class = {'dandelion': '0', 'daisy': '1', 'roses': '0', 'sunflowers': '0', 'tulips': '0', 'extras': '0'}
+
+    def map_it(file_name):
+        pos = file_name.index('/')
+        dir_name = file_name[:pos]
+        the_class = label_to_class[dir_name]
+        return the_class
+
+    # Drop samples of the extended flowers
+    # dataset if they are not wanted
+    if not use_extended_dataset:
+        entry_ids = file_names_df[file_names_df['file_name'].str.contains('extras/')].index
+        file_names_df = file_names_df.drop(entry_ids)
+
+    file_names_df['class'] = file_names_df['file_name'].map(map_it)
+
+    return file_names_df
+
+
+def load_dataset_2(file_name):
+    file_names_df = pd.read_csv(file_name)
+
+    ''' Map the class labels to strings '1' and '0' because scikit-learn train_test_split() requires label classes
+     to be strings, in order to split the dataset with stratification (stratification throws an exception if class 
+     labels are numbers). '''
+
+    file_names_df['class'] = file_names_df['multi_class'].map(lambda x: '1' if x == 51 else '0')
+    file_names_df.drop(columns=['multi_class'], inplace=True)
+
+    return file_names_df
+
+
+def make_model_MobileNetV2(output_bias=None):
+    base_model = tf.keras.applications.MobileNetV2(input_shape=IMAGE_SHAPE,
+                                                   include_top=False,
+                                                   weights='imagenet')
+    for layer in base_model.layers:
+        layer.trainable = False
+    model = tf.keras.Sequential([
+        base_model,
+        tf.keras.layers.GlobalAveragePooling2D(),  # TODO try with Flatten()
+        tf.keras.layers.Dense(1, activation='sigmoid', bias_initializer=output_bias)
+        # With linear activation, fit() won't be able to compute precision and recall
+    ])
+    return model
+
+
+def make_model_DenseNet121(output_bias=None):
+    base_model = DenseNet121(include_top=False, pooling='avg', weights='imagenet', input_shape=IMAGE_SHAPE)
+    # for layer in base_model.layers[0:313]:
+    for layer in base_model.layers:
+        layer.trainable = False
+    model = tf.keras.Sequential([
+        base_model,
+        tf.keras.layers.Dense(256, activation='relu'),
+        tf.keras.layers.Dense(1, activation='sigmoid', bias_initializer=output_bias)
+        # With linear activation, fit() won't be able to compute precision and recall
+    ])
+    return model
+
+
 def main():
     np.random.seed(NP_SEED)
     tf.random.set_seed(TF_SEED)
@@ -266,53 +334,6 @@ def main():
        untar=True)
     """
 
-    def load_dataset_1(file_name):
-        file_names_df = pd.read_csv(file_name)
-
-        ''' Map the class labels to strings '1' and '0' because scikit-learn train_test_split() requires it to split
-        the dataset with stratification (stratification throws an exception if class labels are numbers). '''
-        label_to_class = {'dandelion': '0', 'daisy': '1', 'roses': '0', 'sunflowers': '0', 'tulips': '0', 'extras': '0'}
-
-        def map_it(file_name):
-            pos = file_name.index('/')
-            dir_name = file_name[:pos]
-            the_class = label_to_class[dir_name]
-            return the_class
-
-        # Drop samples of the extended flowers
-        # dataset if they are not wanted
-        if not use_extended_dataset:
-            entry_ids = file_names_df[file_names_df['file_name'].str.contains('extras/')].index
-            file_names_df = file_names_df.drop(entry_ids)
-
-        file_names_df['class'] = file_names_df['file_name'].map(map_it)
-
-        return file_names_df
-
-    def load_dataset_2(file_name):
-        file_names_df = pd.read_csv(file_name)
-
-        ''' Map the class labels to strings '1' and '0' because scikit-learn train_test_split() requires label classes
-         to be strings, in order to split the dataset with stratification (stratification throws an exception if class 
-         labels are numbers). '''
-
-        file_names_df['class'] = file_names_df['multi_class'].map(lambda x: '1' if x == 51 else '0')
-        file_names_df.drop(columns=['multi_class'], inplace=True)
-
-        return file_names_df
-
-    """def load_augmented_dataset(file_name):
-        file_names_df = pd.read_csv(file_name)
-
-        ''' Map the class labels to strings '1' and '0' because scikit-learn train_test_split() requires label classes
-         to be strings, in order to split the dataset with stratification (stratification throws an exception if class 
-         labels are numbers). '''
-
-        file_names_df.drop(columns=['label'], inplace=True)
-        file_names_df['class'] = '1'
-
-        return file_names_df"""
-
     file_names_df = load_dataset_2('flower_classes.csv')
 
     # Randomly select and drop the given number of samples with positive classification
@@ -323,11 +344,16 @@ def main():
         file_names_df = file_names_df.drop(idx_to_be_dropped)
         file_names_df.reset_index(inplace=True, drop=True)
 
-    training_df, test_df = train_test_split(file_names_df, test_size=.15, stratify=file_names_df['class'])
-    training_df, validation_df = train_test_split(training_df, test_size=.15 / .85, stratify=training_df['class'])
+    training_df, test_df = train_test_split(file_names_df, test_size=test_set_fraction, stratify=file_names_df['class'])
+    training_df, validation_df = train_test_split(training_df, test_size=test_set_fraction / (1 - test_set_fraction), stratify=training_df['class'])
     if AUGMENTATION != 0:
-        file_names_augmented_df = augment_positive_samples(file_names_df=training_df, output_file_name=aug_metadata_file_name)
+        file_names_augmented_df = augment_positive_samples(file_names_df=training_df,
+                                                           output_file_name=aug_metadata_file_name)
         training_df = pd.concat([training_df, file_names_augmented_df], axis='rows')
+
+    # Shuffle the training dataset, shouldn't be necessary as the generator does it as well, but cannot find out
+    # for sure in the documentation if the generato shuffles withing the batch or the whole dataset
+    training_df = training_df.sample(frac=1, replace=False)
     training_df.reset_index(inplace=True, drop=True)
     validation_df.reset_index(inplace=True, drop=True)
     test_df.reset_index(inplace=True, drop=True)
@@ -341,11 +367,6 @@ def main():
 
     # data_root = '/home/fanta/.keras/datasets/flower_photos_binary'
     image_generator = tf.keras.preprocessing.image.ImageDataGenerator(rescale=1 / 255)
-    """,
-   rotation_range=45,
-   shear_range=.2,
-   zoom_range=.3,
-   validation_split=.2)"""
 
     # TODO try other interpolations, e.g. bicubic
     training_data = image_generator.flow_from_dataframe(dataframe=training_df,
@@ -386,37 +407,9 @@ def main():
     visual_check_samples = make_validation_generator(shuffle=True)
     plot_classified_samples(visual_check_samples)
     plt.show()
+
     # plt.draw()
     # plt.pause(.01)
-
-    start_time = time()
-
-    def make_model_MobileNetV2(output_bias=None):
-        base_model = tf.keras.applications.MobileNetV2(input_shape=IMAGE_SHAPE,
-                                                       include_top=False,
-                                                       weights='imagenet')
-        for layer in base_model.layers:
-            layer.trainable = False
-        model = tf.keras.Sequential([
-            base_model,
-            tf.keras.layers.GlobalAveragePooling2D(),  # TODO try with Flatten()
-            tf.keras.layers.Dense(1, activation='sigmoid', bias_initializer=output_bias)
-            # With linear activation, fit() won't be able to compute precision and recall
-        ])
-        return model
-
-    def make_model_DenseNet121(output_bias=None):
-        base_model = DenseNet121(include_top=False, pooling='avg', weights='imagenet', input_shape=IMAGE_SHAPE)
-        # for layer in base_model.layers[0:313]:
-        for layer in base_model.layers:
-            layer.trainable = False
-        model = tf.keras.Sequential([
-            base_model,
-            tf.keras.layers.Dense(256, activation='relu'),
-            tf.keras.layers.Dense(1, activation='sigmoid', bias_initializer=output_bias)
-            # With linear activation, fit() won't be able to compute precision and recall
-        ])
-        return model
 
     pos = np.sum(training_df['class'])
     assert sum(training_data.labels) == pos
@@ -472,6 +465,8 @@ def main():
     for file in Path(CHECKPOINTS_DIR).glob('*.hdf5'):
         file.unlink()
 
+    start_time = time()
+
     history = model.fit(training_data, epochs=EPOCHS,
                         steps_per_epoch=steps_per_train_epoch,
                         validation_data=validation_data,
@@ -480,16 +475,16 @@ def main():
                         callbacks=callbacks,
                         verbose=1)
 
+    end_time = time()
+    elapsed = int(end_time - start_time)
+    print("Completed training in {}'{}''.".format(elapsed // 60, elapsed % 60))
+
     plot_metrics(history)
     plt.show()
     # plt.draw()
     # plt.pause(.01)
 
     # Before validation, reload the model with the best loss
-    precision_val = np.array(history.history['val_precision'])
-    recall_val = np.array(history.history['val_recall'])
-    epsilon = 1e-7
-    val_F1 = 2. * (precision_val * recall_val) / (precision_val + recall_val + epsilon)
     # Careful: if you change the choice of metric below, change min/max accordingly!
     # best_epoch = np.argmax(val_F1) + 1
     best_epoch = np.argmin(history.history['val_loss']) + 1
@@ -519,11 +514,6 @@ def main():
     print('Metrics on test set:')
     print_metrics(test_data, test_prediction)
 
-    end_time = time()
-    elapsed= int(end_time - start_time)
-    print('Completed in {} minutes and {} seconds'.format(elapsed // 60, elapsed % 60 ))
-
-
     plot_auc_and_pr(test_data.labels, test_prediction)
     plt.show()
     # plt.draw()
@@ -537,9 +527,15 @@ def main():
 
     # input('Press [Enter] to close charts and end the program.')
 
+
+if __name__ == '__main__':
+    main()
+
     """ TODO
     Ensure augmented images are in the training set only, and they augment other images of the training set only
-    Add timer for training time
+    Introduce tensorboard
+    Compile graph
+    Check new memory profiles on tensorboard
     Try different pre-trained models, also with fine-tuning (densenet)
     Introduce regularization, early stopping, lowering learning rate, resuming training
     try monitoring different metrics for early stopping, e.g. AUC or F1
@@ -547,8 +543,5 @@ def main():
     Implement explainability
     on chest x-ray only: augment positive samples
     Framework to automate experiments
+    Make a dashboard
     """
-
-
-if __name__ == '__main__':
-    main()
