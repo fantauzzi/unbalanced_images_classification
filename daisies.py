@@ -18,27 +18,6 @@ from tensorflow.keras.callbacks import ModelCheckpoint, EarlyStopping, ReduceLRO
 from pathlib import Path
 from tensorflow.keras.applications.densenet import DenseNet121
 
-image_size = (224, 224)
-image_shape = (image_size[0], image_size[1], 3)
-n_epochs = 3
-batch_size = 24
-val_batch_size = 64
-THETA = .5
-dataset_root = '/home/fanta/.keras/datasets/102flowers/jpg'
-checkpoints_dir = 'checkpoints'
-checkpoints_path = checkpoints_dir + '/weights.{epoch:05d}.hdf5'
-count_to_be_dropped = 0
-use_extended_dataset = False
-py_seed = 44
-np_seed = 43
-tf_seed = 42
-augm_factor = 3
-target_augm_subdir = 'augmented'
-augm_target_dir = dataset_root + '/' + target_augm_subdir
-augm_batch_size = 64
-aug_metadata_file_name = 'augmented.csv'
-test_set_fraction = .2
-
 
 def plot_metrics(history):
     epsilon = 1e-7
@@ -98,31 +77,22 @@ def plot_metrics(history):
     fig.subplots_adjust(wspace=.3, hspace=.3)
 
 
-def plot_classified_samples(validation_samples, model=None, theta=THETA):
+def plot_classified_samples(validation_samples):
     for image_batch, label_batch in validation_samples:
         print("Image batch shape: ", image_batch.shape)
         print("Label batch shape: ", label_batch.shape)
         break
-
-    if model is not None:
-        predicted_batch = model.predict(image_batch)
-        predicted_id = (np.squeeze(predicted_batch) >= theta).astype(int)
-        predicted_label_batch = np.array(['daisy' if item == 1 else 'not daisy' for item in predicted_id])
-        label_id = label_batch.astype(int)
 
     plt.figure(figsize=(10, 9))
     plt.subplots_adjust(hspace=0.5)
     for n in range(30):
         plt.subplot(6, 5, n + 1)
         plt.imshow(image_batch[n])
-        if model is not None:
-            color = "green" if predicted_id[n] == label_id[n] else "red"
-            plt.title(predicted_label_batch[n], color=color)
         plt.axis('off')
     _ = plt.suptitle("Model predictions (green: correct, red: incorrect)")
 
 
-def plot_misclassified_samples(validation_samples, model, theta=THETA):
+def plot_misclassified_samples(validation_samples, model, theta):
     max_to_be_plotted = 30
     to_be_plotted = []
     to_be_plotted_label = []
@@ -210,12 +180,12 @@ def plot_auc_and_pr(t_y, p_y):
     ax.set_ylabel('F1')
 
 
-def augment_positive_samples(file_names_df, output_file_name):
+def augment_positive_samples(file_names_df, output_file_name, params):
     file_names_df = file_names_df[file_names_df['class'] == '1']
     # print('Loaded information for', len(file_names_df), 'files with positive samples.')
-    print('Making', augm_factor, 'new samples for every positive sample.')
+    print('Making', params['augm_factor'], 'new samples for every positive sample.')
 
-    for file in Path(augm_target_dir).glob('*.png'):
+    for file in Path(params['augm_target_dir']).glob('*.png'):
         file.unlink()
 
     image_generator = tf.keras.preprocessing.image.ImageDataGenerator(rotation_range=90,
@@ -225,15 +195,15 @@ def augment_positive_samples(file_names_df, output_file_name):
 
     # TODO try other interpolations, e.g. bicubic
     generated_data = image_generator.flow_from_dataframe(dataframe=file_names_df,
-                                                         directory=dataset_root,
-                                                         save_to_dir=augm_target_dir,
-                                                         target_size=image_size,
+                                                         directory=params['dataset_root'],
+                                                         save_to_dir=params['augm_target_dir'],
+                                                         target_size=params['image_size'],
                                                          x_col='file_name',
                                                          y_col='class',
                                                          class_mode='raw',
-                                                         batch_size=augm_batch_size,
+                                                         batch_size=params['augm_batch_size'],
                                                          shuffle=False)
-    wanted_batches = int(augm_factor * np.ceil(generated_data.samples / generated_data.batch_size))
+    wanted_batches = int(params['augm_factor'] * np.ceil(generated_data.samples / generated_data.batch_size))
     generated_images_count = 0
     for image_batch, label_batch in generated_data:
         assert sum(label_batch == '1') == len(image_batch)
@@ -241,45 +211,21 @@ def augment_positive_samples(file_names_df, output_file_name):
         print('.', end='', flush=True)
         if generated_data.total_batches_seen == wanted_batches:
             break
-    print('\nGenerated', generated_images_count, 'images in', augm_target_dir)
+    print('\nGenerated', generated_images_count, 'images in', params['augm_target_dir'])
 
     new_rows = []
     with open(output_file_name, 'w') as target_file:
         target_file.write('file_name,label,class\n')
-        for file_name in Path(augm_target_dir).glob('*.png'):
-            to_be_written = target_augm_subdir + '/' + str(file_name.name)
+        for file_name in Path(params['augm_target_dir']).glob('*.png'):
+            to_be_written = params['augm_target_subdir'] + '/' + str(file_name.name)
             target_file.write(to_be_written + ',51\n')
             new_rows.append({'file_name': to_be_written, 'class': '1'})
-    print('Written metadata file', aug_metadata_file_name)
+    print('Written metadata file', params['aug_metadata_file_name'])
     metadata_df = pd.DataFrame(new_rows)
     return metadata_df
 
 
-def load_dataset_1(file_name):
-    file_names_df = pd.read_csv(file_name)
-
-    ''' Map the class labels to strings '1' and '0' because scikit-learn train_test_split() requires it to split
-    the dataset with stratification (stratification throws an exception if class labels are numbers). '''
-    label_to_class = {'dandelion': '0', 'daisy': '1', 'roses': '0', 'sunflowers': '0', 'tulips': '0', 'extras': '0'}
-
-    def map_it(file_name):
-        pos = file_name.index('/')
-        dir_name = file_name[:pos]
-        the_class = label_to_class[dir_name]
-        return the_class
-
-    # Drop samples of the extended flowers
-    # dataset if they are not wanted
-    if not use_extended_dataset:
-        entry_ids = file_names_df[file_names_df['file_name'].str.contains('extras/')].index
-        file_names_df = file_names_df.drop(entry_ids)
-
-    file_names_df['class'] = file_names_df['file_name'].map(map_it)
-
-    return file_names_df
-
-
-def load_dataset_2(file_name):
+def load_dataset_(file_name):
     file_names_df = pd.read_csv(file_name)
 
     ''' Map the class labels to strings '1' and '0' because scikit-learn train_test_split() requires label classes
@@ -292,7 +238,7 @@ def load_dataset_2(file_name):
     return file_names_df
 
 
-def make_model_MobileNetV2(output_bias=None):
+def make_model_MobileNetV2(image_shape, output_bias=None):
     base_model = tf.keras.applications.MobileNetV2(input_shape=image_shape,
                                                    include_top=False,
                                                    weights='imagenet')
@@ -307,7 +253,7 @@ def make_model_MobileNetV2(output_bias=None):
     return model
 
 
-def make_model_DenseNet121(output_bias=None):
+def make_model_DenseNet121(image_shape, output_bias=None):
     base_model = DenseNet121(include_top=False, pooling='avg', weights='imagenet', input_shape=image_shape)
     # for layer in base_model.layers:
     for layer in base_model.layers[0:313]:
@@ -321,7 +267,27 @@ def make_model_DenseNet121(output_bias=None):
     return model
 
 
-def main():
+def run_experiment(params):
+    n_epochs = params['n_epochs']
+    batch_size = params['batch_size']
+    val_batch_size = params['val_batch_size']
+    test_set_fraction = params['test_set_fraction']
+    augm_batch_size = params['augm_batch_size']
+    augm_factor = params['augm_factor']
+    theta = params['theta']
+    count_to_be_dropped = params['count_to_be_dropped']
+    image_size = params['image_size']
+    image_shape = params['image_shape']
+    dataset_root = params['dataset_root']
+    checkpoints_dir = params['checkpoints_dir']
+    checkpoints_path = params['checkpoints_path']
+    augm_target_subdir = params['augm_target_subdir']
+    augm_target_dir = params['augm_target_dir']
+    aug_metadata_file_name = params['aug_metadata_file_name']
+    py_seed = params['py_seed']
+    np_seed = params['np_seed']
+    tf_seed = params['tf_seed']
+
     np.random.seed(np_seed)
     tf.random.set_seed(tf_seed)
     random.seed(py_seed)
@@ -334,7 +300,7 @@ def main():
        untar=True)
     """
 
-    file_names_df = load_dataset_2('flower_classes.csv')
+    file_names_df = load_dataset_('flower_classes.csv')
 
     # Randomly select and drop the given number of samples with positive classification
     if count_to_be_dropped > 0:
@@ -345,10 +311,12 @@ def main():
         file_names_df.reset_index(inplace=True, drop=True)
 
     training_df, test_df = train_test_split(file_names_df, test_size=test_set_fraction, stratify=file_names_df['class'])
-    training_df, validation_df = train_test_split(training_df, test_size=test_set_fraction / (1 - test_set_fraction), stratify=training_df['class'])
+    training_df, validation_df = train_test_split(training_df, test_size=test_set_fraction / (1 - test_set_fraction),
+                                                  stratify=training_df['class'])
     if augm_factor != 0:
         file_names_augmented_df = augment_positive_samples(file_names_df=training_df,
-                                                           output_file_name=aug_metadata_file_name)
+                                                           output_file_name=aug_metadata_file_name,
+                                                           params=params)
         training_df = pd.concat([training_df, file_names_augmented_df], axis='rows')
 
     # Shuffle the training dataset, shouldn't be necessary as the generator does it as well, but cannot find out
@@ -418,8 +386,8 @@ def main():
     neg = total - pos
     print("Count of samples in training dataset: positive=", pos, ' negative=', neg, ' total=', total, sep='')
 
-    model = make_model_DenseNet121(constant(np.log([pos / neg])))
-    # model = make_model_MobileNetV2(constant(np.log([pos / neg])))
+    model = make_model_DenseNet121(image_shape, constant(np.log([pos / neg])))
+    # model = make_model_MobileNetV2(image_shape, constant(np.log([pos / neg])))
     model.summary()
 
     model.compile(
@@ -498,7 +466,7 @@ def main():
     def print_metrics(samples, prediction):
         prediction = np.squeeze(prediction)
         assert len(prediction) == len(samples.labels)
-        predicted_id = (np.squeeze(prediction) >= THETA).astype(int)
+        predicted_id = (np.squeeze(prediction) >= theta).astype(int)
         print('   F1 score', f1_score(samples.labels, predicted_id))
         print('   Precision', precision_score(samples.labels, predicted_id))
         print('   Recall', recall_score(samples.labels, predicted_id))
@@ -520,7 +488,7 @@ def main():
     # plt.pause(.01)
 
     validation_samples = make_validation_generator(shuffle=True)
-    plot_misclassified_samples(validation_samples, model)
+    plot_misclassified_samples(validation_samples, model, theta)
     plt.show()
     # plt.draw()
     # plt.pause(.01)
@@ -529,9 +497,31 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    params = {'n_epochs': 10,  # TODO use a named tuple instead?
+              'batch_size': 24,
+              'val_batch_size': 64,
+              'test_set_fraction': .2,
+              'augm_batch_size': 64,
+              'augm_factor': 3,
+              'theta': .5,
+              'count_to_be_dropped': 0,
+              'image_shape': (224, 224, 3),
+              'dataset_root': '/home/fanta/.keras/datasets/102flowers/jpg',
+              'checkpoints_dir': 'checkpoints',
+              'augm_target_subdir': 'augmented',
+              'aug_metadata_file_name': 'augmented.csv',
+              'py_seed': 44,
+              'np_seed': 43,
+              'tf_seed': 42}
 
-    """ TODO
+    params['checkpoints_path'] = params['checkpoints_dir'] + '/weights.{epoch:05d}.hdf5'
+    params['augm_target_dir'] = params['dataset_root'] + '/' + params['augm_target_subdir']
+    params['image_size'] = params['image_shape'][:2]
+
+    run_experiment(params)
+
+    """ 
+    TODO
     Introduce tensorboard
     Check new memory profiles on tensorboard
     Introduce regularization, early stopping, lowering learning rate, resuming training
