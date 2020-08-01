@@ -18,24 +18,24 @@ from tensorflow.keras.callbacks import ModelCheckpoint, EarlyStopping, ReduceLRO
 from pathlib import Path
 from tensorflow.keras.applications.densenet import DenseNet121
 
-IMAGE_SIZE = (224, 224)
-IMAGE_SHAPE = (IMAGE_SIZE[0], IMAGE_SIZE[1], 3)
-EPOCHS = 30
-BATCH_SIZE = 24
-VALIDATION_BATCH_SIZE = 64
+image_size = (224, 224)
+image_shape = (image_size[0], image_size[1], 3)
+n_epochs = 3
+batch_size = 24
+val_batch_size = 64
 THETA = .5
-DATASET_ROOT = '/home/fanta/.keras/datasets/102flowers/jpg'
-CHECKPOINTS_DIR = 'checkpoints'
-CHECKPOINTS_PATH = CHECKPOINTS_DIR + '/weights.{epoch:05d}.hdf5'
+dataset_root = '/home/fanta/.keras/datasets/102flowers/jpg'
+checkpoints_dir = 'checkpoints'
+checkpoints_path = checkpoints_dir + '/weights.{epoch:05d}.hdf5'
 count_to_be_dropped = 0
 use_extended_dataset = False
-PY_SEED = 44
-NP_SEED = 43
-TF_SEED = 42
-AUGMENTATION = 3
-TARGET_SUBDIR = 'augmented'
-AUGMENTATION_TARGET_DIR = DATASET_ROOT + '/' + TARGET_SUBDIR
-AUGMENTATION_BATCH_SIZE = 64
+py_seed = 44
+np_seed = 43
+tf_seed = 42
+augm_factor = 3
+target_augm_subdir = 'augmented'
+augm_target_dir = dataset_root + '/' + target_augm_subdir
+augm_batch_size = 64
 aug_metadata_file_name = 'augmented.csv'
 test_set_fraction = .2
 
@@ -213,9 +213,9 @@ def plot_auc_and_pr(t_y, p_y):
 def augment_positive_samples(file_names_df, output_file_name):
     file_names_df = file_names_df[file_names_df['class'] == '1']
     # print('Loaded information for', len(file_names_df), 'files with positive samples.')
-    print('Making', AUGMENTATION, 'new samples for every positive sample.')
+    print('Making', augm_factor, 'new samples for every positive sample.')
 
-    for file in Path(AUGMENTATION_TARGET_DIR).glob('*.png'):
+    for file in Path(augm_target_dir).glob('*.png'):
         file.unlink()
 
     image_generator = tf.keras.preprocessing.image.ImageDataGenerator(rotation_range=90,
@@ -225,15 +225,15 @@ def augment_positive_samples(file_names_df, output_file_name):
 
     # TODO try other interpolations, e.g. bicubic
     generated_data = image_generator.flow_from_dataframe(dataframe=file_names_df,
-                                                         directory=DATASET_ROOT,
-                                                         save_to_dir=AUGMENTATION_TARGET_DIR,
-                                                         target_size=IMAGE_SIZE,
+                                                         directory=dataset_root,
+                                                         save_to_dir=augm_target_dir,
+                                                         target_size=image_size,
                                                          x_col='file_name',
                                                          y_col='class',
                                                          class_mode='raw',
-                                                         batch_size=AUGMENTATION_BATCH_SIZE,
+                                                         batch_size=augm_batch_size,
                                                          shuffle=False)
-    wanted_batches = int(AUGMENTATION * np.ceil(generated_data.samples / generated_data.batch_size))
+    wanted_batches = int(augm_factor * np.ceil(generated_data.samples / generated_data.batch_size))
     generated_images_count = 0
     for image_batch, label_batch in generated_data:
         assert sum(label_batch == '1') == len(image_batch)
@@ -241,13 +241,13 @@ def augment_positive_samples(file_names_df, output_file_name):
         print('.', end='', flush=True)
         if generated_data.total_batches_seen == wanted_batches:
             break
-    print('\nGenerated', generated_images_count, 'images in', AUGMENTATION_TARGET_DIR)
+    print('\nGenerated', generated_images_count, 'images in', augm_target_dir)
 
     new_rows = []
     with open(output_file_name, 'w') as target_file:
         target_file.write('file_name,label,class\n')
-        for file_name in Path(AUGMENTATION_TARGET_DIR).glob('*.png'):
-            to_be_written = TARGET_SUBDIR + '/' + str(file_name.name)
+        for file_name in Path(augm_target_dir).glob('*.png'):
+            to_be_written = target_augm_subdir + '/' + str(file_name.name)
             target_file.write(to_be_written + ',51\n')
             new_rows.append({'file_name': to_be_written, 'class': '1'})
     print('Written metadata file', aug_metadata_file_name)
@@ -293,7 +293,7 @@ def load_dataset_2(file_name):
 
 
 def make_model_MobileNetV2(output_bias=None):
-    base_model = tf.keras.applications.MobileNetV2(input_shape=IMAGE_SHAPE,
+    base_model = tf.keras.applications.MobileNetV2(input_shape=image_shape,
                                                    include_top=False,
                                                    weights='imagenet')
     for layer in base_model.layers:
@@ -308,9 +308,9 @@ def make_model_MobileNetV2(output_bias=None):
 
 
 def make_model_DenseNet121(output_bias=None):
-    base_model = DenseNet121(include_top=False, pooling='avg', weights='imagenet', input_shape=IMAGE_SHAPE)
-    # for layer in base_model.layers[0:313]:
-    for layer in base_model.layers:
+    base_model = DenseNet121(include_top=False, pooling='avg', weights='imagenet', input_shape=image_shape)
+    # for layer in base_model.layers:
+    for layer in base_model.layers[0:313]:
         layer.trainable = False
     model = tf.keras.Sequential([
         base_model,
@@ -322,9 +322,9 @@ def make_model_DenseNet121(output_bias=None):
 
 
 def main():
-    np.random.seed(NP_SEED)
-    tf.random.set_seed(TF_SEED)
-    random.seed(PY_SEED)
+    np.random.seed(np_seed)
+    tf.random.set_seed(tf_seed)
+    random.seed(py_seed)
 
     # classifier_url = "https://tfhub.dev/google/tf2-preview/mobilenet_v2/classification/2"  # @param {type:"string"}
 
@@ -346,7 +346,7 @@ def main():
 
     training_df, test_df = train_test_split(file_names_df, test_size=test_set_fraction, stratify=file_names_df['class'])
     training_df, validation_df = train_test_split(training_df, test_size=test_set_fraction / (1 - test_set_fraction), stratify=training_df['class'])
-    if AUGMENTATION != 0:
+    if augm_factor != 0:
         file_names_augmented_df = augment_positive_samples(file_names_df=training_df,
                                                            output_file_name=aug_metadata_file_name)
         training_df = pd.concat([training_df, file_names_augmented_df], axis='rows')
@@ -370,34 +370,34 @@ def main():
 
     # TODO try other interpolations, e.g. bicubic
     training_data = image_generator.flow_from_dataframe(dataframe=training_df,
-                                                        directory=DATASET_ROOT,
+                                                        directory=dataset_root,
                                                         x_col='file_name',
                                                         y_col='class',
-                                                        target_size=IMAGE_SIZE,
+                                                        target_size=image_size,
                                                         class_mode='raw',
-                                                        batch_size=BATCH_SIZE,
+                                                        batch_size=batch_size,
                                                         shuffle=True)
 
     def make_validation_generator(shuffle=False):
         validation_data = image_generator.flow_from_dataframe(dataframe=validation_df,
-                                                              directory=DATASET_ROOT,
+                                                              directory=dataset_root,
                                                               x_col='file_name',
                                                               y_col='class',
-                                                              target_size=IMAGE_SIZE,
+                                                              target_size=image_size,
                                                               class_mode='raw',
-                                                              batch_size=VALIDATION_BATCH_SIZE,
+                                                              batch_size=val_batch_size,
                                                               shuffle=shuffle)
 
         return validation_data
 
     def make_test_generator():
         test_data = image_generator.flow_from_dataframe(dataframe=test_df,
-                                                        directory=DATASET_ROOT,
+                                                        directory=dataset_root,
                                                         x_col='file_name',
                                                         y_col='class',
-                                                        target_size=IMAGE_SIZE,
+                                                        target_size=image_size,
                                                         class_mode='raw',
-                                                        batch_size=VALIDATION_BATCH_SIZE,
+                                                        batch_size=val_batch_size,
                                                         shuffle=False)
 
         return test_data
@@ -438,7 +438,7 @@ def main():
                                       patience=10,
                                       restore_best_weights=False)
 
-    checkpoint_CB = ModelCheckpoint(CHECKPOINTS_PATH,
+    checkpoint_CB = ModelCheckpoint(checkpoints_path,
                                     monitor='val_loss',
                                     verbose=1,
                                     save_best_only=False,
@@ -462,12 +462,12 @@ def main():
     print('Weight for class 0: {}'.format(weight_for_0))
     print('Weight for class 1: {}'.format(weight_for_1))
 
-    for file in Path(CHECKPOINTS_DIR).glob('*.hdf5'):
+    for file in Path(checkpoints_dir).glob('*.hdf5'):
         file.unlink()
 
     start_time = time()
 
-    history = model.fit(training_data, epochs=EPOCHS,
+    history = model.fit(training_data, epochs=n_epochs,
                         steps_per_epoch=steps_per_train_epoch,
                         validation_data=validation_data,
                         validation_steps=steps_per_val_epoch,
@@ -491,7 +491,7 @@ def main():
     if best_epoch == len(history.history['val_loss']):
         print('Best epoch is the last one, keeping it for validation')
     else:
-        weights_file = CHECKPOINTS_PATH.format(epoch=best_epoch)
+        weights_file = checkpoints_path.format(epoch=best_epoch)
         print('Loading weights from file', weights_file, 'corresponding to best epoch', best_epoch)
         model.load_weights(weights_file)
 
@@ -532,16 +532,12 @@ if __name__ == '__main__':
     main()
 
     """ TODO
-    Ensure augmented images are in the training set only, and they augment other images of the training set only
     Introduce tensorboard
-    Compile graph
     Check new memory profiles on tensorboard
-    Try different pre-trained models, also with fine-tuning (densenet)
     Introduce regularization, early stopping, lowering learning rate, resuming training
     try monitoring different metrics for early stopping, e.g. AUC or F1
     try validation with balanced classes
     Implement explainability
-    on chest x-ray only: augment positive samples
     Framework to automate experiments
     Make a dashboard
     """
