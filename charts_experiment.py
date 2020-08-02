@@ -32,7 +32,7 @@ def make_figure1(param):
     plt.pause(.01)
 
 
-def make_figure2(param):
+def display_dashboard(param):
     def format_axes(fig):
         for i, ax in enumerate(fig.axes):
             ax.text(0.5, 0.5, "ax%d" % (i + 1), va="center", ha="center")
@@ -94,7 +94,7 @@ def make_figure2(param):
     ax_f1t.set_ylabel('F1')
 
     fig.suptitle("Dashboard -Epoch {}".format(param))
-    #format_axes(fig)
+    # format_axes(fig)
 
     for ax in fig.get_axes():
         if ax.get_title() in ('Loss', ''):
@@ -114,6 +114,6 @@ def delay(n=100000000):
 
 for i in range(10):
     make_figure1(i)
-    make_figure2(i)
+    display_dashboard(i)
     delay()
     # sleep(3)
