@@ -1,8 +1,7 @@
 import matplotlib.pylab as plt
-import random
-
 # plt.ion()
 print('Using', plt.get_backend(), 'as graphics backend.')
+import random
 import tensorflow as tf
 import tensorflow_hub as hub
 from tensorflow.keras import layers
@@ -17,6 +16,8 @@ from tensorflow.keras.initializers import constant
 from tensorflow.keras.callbacks import ModelCheckpoint, EarlyStopping, ReduceLROnPlateau
 from pathlib import Path
 from tensorflow.keras.applications.densenet import DenseNet121
+from hyperopt import hp
+from hyperopt.pyll.stochastic import sample
 
 
 def plot_metrics(history):
@@ -77,13 +78,14 @@ def plot_metrics(history):
     fig.subplots_adjust(wspace=.3, hspace=.3)
 
 
-def plot_classified_samples(validation_samples):
+def plot_classified_samples(validation_samples, fig_no):
     for image_batch, label_batch in validation_samples:
         print("Image batch shape: ", image_batch.shape)
         print("Label batch shape: ", label_batch.shape)
         break
 
-    plt.figure(figsize=(10, 9))
+    the_figure = plt.figure(num=fig_no, figsize=(10, 9))
+    the_figure.clear()
     plt.subplots_adjust(hspace=0.5)
     for n in range(30):
         plt.subplot(6, 5, n + 1)
@@ -92,7 +94,7 @@ def plot_classified_samples(validation_samples):
     _ = plt.suptitle("Model predictions (green: correct, red: incorrect)")
 
 
-def plot_misclassified_samples(validation_samples, model, theta):
+def plot_misclassified_samples(validation_samples, model, theta, fig_no):
     max_to_be_plotted = 30
     to_be_plotted = []
     to_be_plotted_label = []
@@ -117,7 +119,8 @@ def plot_misclassified_samples(validation_samples, model, theta):
         if len(to_be_plotted) == max_to_be_plotted:
             break
 
-    plt.figure(figsize=(10, 9))
+    the_figure = plt.figure(num=fig_no, figsize=(10, 9))
+    the_figure.clear()
     plt.subplots_adjust(hspace=0.5)
     for n in range(len(to_be_plotted)):
         plt.subplot(6, 5, n + 1)
@@ -275,7 +278,6 @@ def run_experiment(params):
     augm_batch_size = params['augm_batch_size']
     augm_factor = params['augm_factor']
     theta = params['theta']
-    count_to_be_dropped = params['count_to_be_dropped']
     image_size = params['image_size']
     image_shape = params['image_shape']
     dataset_root = params['dataset_root']
@@ -292,6 +294,8 @@ def run_experiment(params):
     tf.random.set_seed(tf_seed)
     random.seed(py_seed)
 
+    samples_fig_no = 1
+
     # classifier_url = "https://tfhub.dev/google/tf2-preview/mobilenet_v2/classification/2"  # @param {type:"string"}
 
     """
@@ -301,14 +305,6 @@ def run_experiment(params):
     """
 
     file_names_df = load_dataset_('flower_classes.csv')
-
-    # Randomly select and drop the given number of samples with positive classification
-    if count_to_be_dropped > 0:
-        idx_to_be_dropped = np.random.choice(file_names_df[file_names_df['class'] == '1'].index,
-                                             size=count_to_be_dropped,
-                                             replace=False)
-        file_names_df = file_names_df.drop(idx_to_be_dropped)
-        file_names_df.reset_index(inplace=True, drop=True)
 
     training_df, test_df = train_test_split(file_names_df, test_size=test_set_fraction, stratify=file_names_df['class'])
     training_df, validation_df = train_test_split(training_df, test_size=test_set_fraction / (1 - test_set_fraction),
@@ -373,7 +369,7 @@ def run_experiment(params):
     validation_data = make_validation_generator()
 
     visual_check_samples = make_validation_generator(shuffle=True)
-    plot_classified_samples(visual_check_samples)
+    plot_classified_samples(visual_check_samples, fig_no=samples_fig_no)
     plt.show()
 
     # plt.draw()
@@ -488,23 +484,23 @@ def run_experiment(params):
     # plt.pause(.01)
 
     validation_samples = make_validation_generator(shuffle=True)
-    plot_misclassified_samples(validation_samples, model, theta)
+    plot_misclassified_samples(validation_samples, model, theta, fig_no=samples_fig_no)
     plt.show()
     # plt.draw()
     # plt.pause(.01)
 
-    # input('Press [Enter] to close charts and end the program.')
+    to_be_minimized = history.history['val_loss'][best_epoch - 1]
+    return to_be_minimized
 
 
 if __name__ == '__main__':
-    params = {'n_epochs': 10,  # TODO use a named tuple instead?
+    params = {'n_epochs': 2,  # TODO use a named tuple instead?
               'batch_size': 24,
               'val_batch_size': 64,
               'test_set_fraction': .2,
               'augm_batch_size': 64,
               'augm_factor': 3,
               'theta': .5,
-              'count_to_be_dropped': 0,
               'image_shape': (224, 224, 3),
               'dataset_root': '/home/fanta/.keras/datasets/102flowers/jpg',
               'checkpoints_dir': 'checkpoints',
@@ -517,8 +513,11 @@ if __name__ == '__main__':
     params['checkpoints_path'] = params['checkpoints_dir'] + '/weights.{epoch:05d}.hdf5'
     params['augm_target_dir'] = params['dataset_root'] + '/' + params['augm_target_subdir']
     params['image_size'] = params['image_shape'][:2]
+    hyper_space = {'batch_size': hp.quniform('batch_size', 16, 32, 1),
+                   'test_set_fraction': hp.uniform('test_set_fraction', .15, .25)}
 
     run_experiment(params)
+    input('Press [Enter] to end.')
 
     """ 
     TODO
