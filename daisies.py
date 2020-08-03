@@ -9,13 +9,11 @@ print('Is interactive:', is_interactive())
 import random
 import tensorflow as tf
 import tensorflow_hub as hub
-from tensorflow.keras import layers
 import numpy as np
 import pandas as pd
 from time import time
-import PIL.Image as Image
-from sklearn.metrics import roc_curve, auc, precision_recall_curve, average_precision_score, \
-    plot_precision_recall_curve, f1_score, confusion_matrix, precision_score, recall_score, accuracy_score
+from sklearn.metrics import roc_curve, auc, precision_recall_curve, average_precision_score, f1_score, confusion_matrix, \
+    precision_score, recall_score, accuracy_score
 from sklearn.model_selection import train_test_split
 from tensorflow.keras.initializers import constant
 from tensorflow.keras.callbacks import ModelCheckpoint, EarlyStopping, ReduceLROnPlateau
@@ -23,6 +21,9 @@ from pathlib import Path
 from tensorflow.keras.applications.densenet import DenseNet121
 from hyperopt import hp
 from hyperopt.pyll.stochastic import sample
+from hyperopt import tpe
+from hyperopt import Trials
+from hyperopt import fmin
 
 
 def plot_samples(samples, fig_no):
@@ -298,12 +299,12 @@ def make_model_DenseNet121(image_shape, output_bias=None):
 
 
 def run_experiment(params):
-    n_epochs = params['n_epochs']
-    batch_size = params['batch_size']
-    val_batch_size = params['val_batch_size']
-    test_set_fraction = params['test_set_fraction']
-    augm_batch_size = params['augm_batch_size']
+    batch_size = int(params['batch_size'])
     augm_factor = params['augm_factor']
+    test_set_fraction = params['test_set_fraction']
+    n_epochs = params['n_epochs']
+    val_batch_size = params['val_batch_size']
+    augm_batch_size = params['augm_batch_size']
     theta = params['theta']
     image_size = params['image_size']
     image_shape = params['image_shape']
@@ -416,9 +417,9 @@ def run_experiment(params):
     model.compile(
         optimizer=tf.keras.optimizers.Adam(),  # Consider others, e.g. RMSprop
         loss=tf.keras.losses.BinaryCrossentropy(from_logits=True),
-        metrics=[tf.keras.metrics.BinaryAccuracy(), tf.keras.metrics.Precision(),
-                 tf.keras.metrics.Recall(),
-                 tf.keras.metrics.AUC()])
+        metrics=[tf.keras.metrics.BinaryAccuracy(name='binary_accuracy'), tf.keras.metrics.Precision(name='precision'),
+                 tf.keras.metrics.Recall(name='recall'),
+                 tf.keras.metrics.AUC(name='auc')])
 
     '''Using restore_best_weights=False here because, even if set to True, it only works when early stopping actually 
     kicked in, see https://github.com/keras-team/keras/issues/12511
@@ -512,11 +513,11 @@ def run_experiment(params):
 
 if __name__ == '__main__':
     params = {'n_epochs': 2,  # TODO use a named tuple instead?
-              'batch_size': 24,
+              'batch_size': hp.quniform('batch_size', 16, 32, 1),
               'val_batch_size': 64,
-              'test_set_fraction': .2,
+              'test_set_fraction': hp.uniform('test_set_fraction', .20, .35),
               'augm_batch_size': 64,
-              'augm_factor': 3,
+              'augm_factor': hp.choice('augm_factor', (0, 1, 2, 3, 4)),
               'theta': .5,
               'image_shape': (224, 224, 3),
               'dataset_root': '/home/fanta/.keras/datasets/102flowers/jpg',
@@ -530,10 +531,11 @@ if __name__ == '__main__':
     params['checkpoints_path'] = params['checkpoints_dir'] + '/weights.{epoch:05d}.hdf5'
     params['augm_target_dir'] = params['dataset_root'] + '/' + params['augm_target_subdir']
     params['image_size'] = params['image_shape'][:2]
-    hyper_space = {'batch_size': hp.quniform('batch_size', 16, 32, 1),
-                   'test_set_fraction': hp.uniform('test_set_fraction', .15, .25)}
 
-    run_experiment(params)
+    tpe_algorithm = tpe.suggest
+    bayes_trials = Trials()
+    best = fmin(fn=run_experiment, space=params, algo=tpe.suggest, max_evals=4, trials=bayes_trials, verbose=False)
+    print(bayes_trials.best_trial)
     input('Press [Enter] to end.')
 
     """ 
