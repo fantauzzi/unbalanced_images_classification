@@ -25,68 +25,8 @@ from hyperopt import hp
 from hyperopt.pyll.stochastic import sample
 
 
-def plot_metrics(history):
-    epsilon = 1e-7
-    epochs = [i + 1 for i in history.epoch]
-    colors = plt.rcParams['axes.prop_cycle'].by_key()['color']
-    metrics = ['loss', 'auc', 'precision', 'recall']
-    fig, axs = plt.subplots(3, 2)
-    for n, metric in enumerate(metrics):
-        name = metric.replace("_", " ").capitalize()
-        plot_row = n // 2
-        plot_col = n - plot_row * 2
-        axs[plot_row, plot_col].grid(True, axis='x' if metric == 'loss' else 'both')
-        lns1 = axs[plot_row, plot_col].plot(epochs, history.history[metric], color=colors[0], linestyle="--",
-                                            label='Train')
-        if metric != 'loss':
-            axs[plot_row, plot_col].plot(epochs, history.history['val_' + metric], color=colors[0], label='Val')
-        axs[plot_row, plot_col].set_xlabel('Epoch')
-        axs[plot_row, plot_col].set_ylabel(name)
-        if metric == 'loss':
-            loss_min, loss_max = min(history.history['loss']), max(history.history['loss'])
-            loss_range = loss_max - loss_min
-            val_loss_min, val_loss_max = min(history.history['val_loss']), max(history.history['val_loss'])
-            val_loss_range = val_loss_max - val_loss_min
-            gap = .05
-            axs[plot_row, plot_col].set_ylim([min(history.history['loss']) - loss_range * gap,
-                                              max(history.history['loss']) + loss_range * gap])
-            ax2 = axs[plot_row, plot_col].twinx()
-            ax2.set_ylim([min(history.history['val_loss']) - val_loss_range * gap,
-                          max(history.history['val_loss']) + val_loss_range * gap])
-            ax2.set_ylabel('Validation Loss')
-            lns2 = ax2.plot(epochs, history.history['val_' + metric], color=colors[0], label='Val')
-            lns = lns1 + lns2
-            labs = [l.get_label() for l in lns]
-            ax2.legend(lns, labs, loc=0)
-        elif metric == 'auc':
-            axs[plot_row, plot_col].set_ylim([0.8, 1])
-        else:
-            axs[plot_row, plot_col].set_ylim([0, 1])
-        axs[plot_row, plot_col].set_xticks(epochs)
-        if metric != 'loss':
-            axs[plot_row, plot_col].legend()
-    plot_row, plot_col = 2, 0
-    precision = np.array(history.history['precision'])
-    recall = np.array(history.history['recall'])
-    precision_val = np.array(history.history['val_precision'])
-    recall_val = np.array(history.history['val_recall'])
-    train_F1 = 2. * (precision * recall) / (precision + recall + epsilon)
-    val_F1 = 2. * (precision_val * recall_val) / (precision_val + recall_val + epsilon)
-    axs[plot_row, plot_col].grid(True)
-    axs[plot_row, plot_col].plot(epochs, train_F1, color=colors[0], linestyle="--", label='Train')
-    axs[plot_row, plot_col].plot(epochs, val_F1, color=colors[0], label='Val')
-    axs[plot_row, plot_col].set_xlabel('Epoch')
-    axs[plot_row, plot_col].set_ylabel('F1')
-    axs[plot_row, plot_col].set_ylim([0, 1])
-    axs[plot_row, plot_col].set_xticks(epochs)
-    axs[plot_row, plot_col].legend()
-    fig.subplots_adjust(wspace=.3, hspace=.3)
-
-
-def plot_classified_samples(validation_samples, fig_no):
-    for image_batch, label_batch in validation_samples:
-        print("Image batch shape: ", image_batch.shape)
-        print("Label batch shape: ", label_batch.shape)
+def plot_samples(samples, fig_no):
+    for image_batch, label_batch in samples:
         break
 
     the_figure = plt.figure(num=fig_no, figsize=(10, 9))
@@ -95,8 +35,12 @@ def plot_classified_samples(validation_samples, fig_no):
     for n in range(30):
         plt.subplot(6, 5, n + 1)
         plt.imshow(image_batch[n])
+        plt.title(label_batch[n])
         plt.axis('off')
-    _ = plt.suptitle("Model predictions (green: correct, red: incorrect)")
+    _ = plt.suptitle("Samples from the dataset (including any augmentation)")
+
+    plt.draw()
+    plt.pause(.01)
 
 
 def plot_misclassified_samples(validation_samples, model, theta, fig_no):
@@ -111,7 +55,7 @@ def plot_misclassified_samples(validation_samples, model, theta, fig_no):
         predicted_batch = model.predict(image_batch)
         predicted_batch_id = (np.squeeze(predicted_batch) >= theta).astype(int)
         label_batch_id = label_batch.astype(int)
-        correct_label_batch = np.array(['daisy' if item == 1 else 'not daisy' for item in label_batch_id])
+        correct_label_batch = np.array(['Positive' if item == 1 else 'Negative' for item in label_batch_id])
         assert len(image_batch) == len(predicted_batch_id)
         assert len(correct_label_batch) == len(image_batch)
         assert len(predicted_batch_id) == len(label_batch_id)
@@ -134,58 +78,8 @@ def plot_misclassified_samples(validation_samples, model, theta, fig_no):
         plt.axis('off')
     _ = plt.suptitle("Sample of misclassified images with their correct classification")
 
-
-def plot_auc_and_pr(t_y, p_y):
-    fig, axs = plt.subplots(nrows=2, ncols=2, figsize=(8, 8))
-
-    fpr, tpr, thresholds = roc_curve(t_y, p_y, pos_label=1)
-    ax = axs[0, 0]
-    ax.grid()
-    ax.plot(fpr, tpr, label='%s (AUC:%0.2f)' % ('Daisies', auc(fpr, tpr)))
-    ax.legend()
-    ax.set_xlabel('False Positive Rate')
-    ax.set_ylabel('True Positive Rate')
-
-    precision, recall, thresholds = precision_recall_curve(t_y, p_y)
-    ax = axs[1, 0]
-    ax.set_xlim([-.05, 1.05])
-    ax.set_ylim([-.05, 1.05])
-    ax.grid()
-    ax.plot(precision, recall, label='%s (AP Score:%0.2f)' % ('Daisies', average_precision_score(t_y, p_y)))
-    ax.legend()
-    ax.set_xlabel('Recall')
-    ax.set_ylabel('Precision')
-
-    thresholds = np.linspace(.0, 1., num=21)
-    f1_range = np.zeros_like(thresholds, dtype=float)
-    precision_range = np.zeros_like(thresholds, dtype=float)
-    recall_range = np.zeros_like(thresholds, dtype=float)
-    for i, theta in enumerate(thresholds):
-        predicted_id = (np.squeeze(p_y) >= theta).astype(int)
-        f1_range[i] = f1_score(t_y, predicted_id)
-        precision_range[i] = precision_score(t_y, predicted_id)
-        recall_range[i] = recall_score(t_y, predicted_id)
-
-    ax = axs[0, 1]
-    ax.set_ylim([-.05, 1.05])
-    ax.grid()
-    lns1 = ax.plot(thresholds, precision_range, color='blue', label='Precision')
-    ax.set_xlabel('Threshold')
-    ax.set_ylabel('Precision')
-    ax2 = ax.twinx()
-    ax2.set_ylim([-.05, 1.05])
-    ax2.set_ylabel('Recall')
-    lns2 = ax2.plot(thresholds, recall_range, color='red', label='Recall')
-    lns = lns1 + lns2
-    labs = [l.get_label() for l in lns]
-    ax2.legend(lns, labs, loc='lower center')
-
-    ax = axs[1, 1]
-    ax.set_ylim([-.05, 1.05])
-    ax.grid()
-    ax.plot(thresholds, f1_range, color='blue')
-    ax.set_xlabel('Threshold')
-    ax.set_ylabel('F1')
+    plt.draw()
+    plt.pause(.01)
 
 
 def display_dashboard(history, t_y, p_y):
@@ -198,9 +92,7 @@ def display_dashboard(history, t_y, p_y):
     epochs = [i + 1 for i in history.epoch]
     colors = plt.rcParams['axes.prop_cycle'].by_key()['color']
 
-    # fig, axs = plt.subplots(nrows=2, ncols=2, figsize=(8, 8))
-
-    fig = plt.figure(num=2, figsize=(18, 9), constrained_layout=True)
+    fig = plt.figure(num=1, figsize=(18, 9), constrained_layout=True)
     fig.clear()
 
     gs = GridSpec(nrows=6, ncols=12, figure=fig)
@@ -309,7 +201,7 @@ def display_dashboard(history, t_y, p_y):
     # format_axes(fig)
 
     for ax in fig.get_axes():
-        if ax.get_title() in ('Loss', ''):
+        if ax.get_title() in ('Loss', '', 'Precision and Recall to Threshold'):
             continue
         ax.grid(True)
         ax.legend()
@@ -429,7 +321,7 @@ def run_experiment(params):
     tf.random.set_seed(tf_seed)
     random.seed(py_seed)
 
-    samples_fig_no = 1
+    samples_fig_no = 2
 
     # classifier_url = "https://tfhub.dev/google/tf2-preview/mobilenet_v2/classification/2"  # @param {type:"string"}
 
@@ -504,7 +396,7 @@ def run_experiment(params):
     validation_data = make_validation_generator()
 
     visual_check_samples = make_validation_generator(shuffle=True)
-    # plot_classified_samples(visual_check_samples, fig_no=samples_fig_no)
+    plot_samples(visual_check_samples, fig_no=samples_fig_no)
     # plt.show()
 
     # plt.draw()
@@ -578,11 +470,6 @@ def run_experiment(params):
     elapsed = int(end_time - start_time)
     print("Completed training in {}'{}''.".format(elapsed // 60, elapsed % 60))
 
-    # plot_metrics(history)
-    # plt.show()
-    # plt.draw()
-    # plt.pause(.01)
-
     # Before validation, reload the model with the best loss
     # Careful: if you change the choice of metric below, change min/max accordingly!
     # best_epoch = np.argmax(val_F1) + 1
@@ -615,23 +502,16 @@ def run_experiment(params):
     print_metrics(test_data, test_prediction)
 
     display_dashboard(history, test_data.labels, test_prediction)
-    # plot_auc_and_pr(test_data.labels, test_prediction)
-    # plt.show()
-    # plt.draw()
-    # plt.pause(.01)
 
     validation_samples = make_validation_generator(shuffle=True)
-    # plot_misclassified_samples(validation_samples, model, theta, fig_no=samples_fig_no)
-    # plt.show()
-    # plt.draw()
-    # plt.pause(.01)
+    plot_misclassified_samples(validation_samples, model, theta, fig_no=samples_fig_no)
 
     to_be_minimized = history.history['val_loss'][best_epoch - 1]
     return to_be_minimized
 
 
 if __name__ == '__main__':
-    params = {'n_epochs': 20,  # TODO use a named tuple instead?
+    params = {'n_epochs': 2,  # TODO use a named tuple instead?
               'batch_size': 24,
               'val_batch_size': 64,
               'test_set_fraction': .2,
