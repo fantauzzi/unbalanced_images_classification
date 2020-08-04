@@ -24,6 +24,8 @@ from hyperopt.pyll.stochastic import sample
 from hyperopt import tpe
 from hyperopt import Trials
 from hyperopt import fmin
+import csv
+from datetime import datetime
 
 
 def plot_samples(samples, fig_no):
@@ -202,10 +204,10 @@ def display_dashboard(history, t_y, p_y):
     # format_axes(fig)
 
     for ax in fig.get_axes():
-        if ax.get_title() in ('Loss', '', 'Precision and Recall to Threshold'):
-            continue
-        ax.grid(True)
-        ax.legend()
+        if ax.get_title() not in ('Loss', '', 'Precision and Recall to Threshold', 'F1 to Threashold'):
+            ax.legend()
+        if ax.get_title() not in ('Loss', ''):
+            ax.grid(True)
 
     plt.draw()
     plt.pause(.01)
@@ -314,6 +316,7 @@ def run_experiment(params):
     augm_target_subdir = params['augm_target_subdir']
     augm_target_dir = params['augm_target_dir']
     aug_metadata_file_name = params['aug_metadata_file_name']
+    val_results_file_name = params['val_results_file_name']
     py_seed = params['py_seed']
     np_seed = params['np_seed']
     tf_seed = params['tf_seed']
@@ -482,33 +485,52 @@ def run_experiment(params):
         print('Loading weights from file', weights_file, 'corresponding to best epoch', best_epoch)
         model.load_weights(weights_file)
 
-    def print_metrics(samples, prediction):
+    def compute_metrics(samples, prediction):
         prediction = np.squeeze(prediction)
         assert len(prediction) == len(samples.labels)
         predicted_id = (np.squeeze(prediction) >= theta).astype(int)
-        print('   F1 score', f1_score(samples.labels, predicted_id))
-        print('   Precision', precision_score(samples.labels, predicted_id))
-        print('   Recall', recall_score(samples.labels, predicted_id))
-        print('   Accuracy', accuracy_score(samples.labels, predicted_id))
+        f1 = f1_score(samples.labels, predicted_id)
+        pre = precision_score(samples.labels, predicted_id)
+        recall = recall_score(samples.labels, predicted_id)
+        accu = accuracy_score(samples.labels, predicted_id)
+        return f1, pre, recall, accu
+
+    def print_metrics(f1, pre, recall, accu):
+        print('   F1 score', f1)
+        print('   Precision', pre)
+        print('   Recall', recall)
+        print('   Accuracy', accu)
 
     validation_data = make_validation_generator()
     validation_prediction = model.predict(validation_data, batch_size=validation_data.batch_size, verbose=1)
     print('Metrics on validation set:')
-    print_metrics(validation_data, validation_prediction)
+    val_metrics = compute_metrics(validation_data, validation_prediction)
+    print_metrics(*val_metrics)
+    val_loss = history.history['val_loss'][best_epoch - 1]
+    fpr, tpr, _ = roc_curve(validation_data.labels, validation_prediction, pos_label=1)
+    val_auc = auc(fpr, tpr)
+    val_ap = average_precision_score(validation_data.labels, validation_prediction)
+
+    with open(val_results_file_name, 'a') as results_file:
+        writer = csv.writer(results_file)
+        writer.writerow(
+            [str(datetime.now()), elapsed] + [params[param_name] for param_name in sorted(params.keys())] + list(
+                val_metrics[:3]) + [val_auc, val_ap,
+                                    val_loss])
 
     test_data = make_test_generator()
     test_prediction = model.predict(test_data, batch_size=test_data.batch_size, verbose=1)
     test_prediction = np.squeeze(test_prediction)
     print('Metrics on test set:')
-    print_metrics(test_data, test_prediction)
+    test_metrics = compute_metrics(validation_data, validation_prediction)
+    print_metrics(*test_metrics)
 
     display_dashboard(history, test_data.labels, test_prediction)
 
     validation_samples = make_validation_generator(shuffle=True)
     plot_misclassified_samples(validation_samples, model, theta, fig_no=samples_fig_no)
 
-    to_be_minimized = history.history['val_loss'][best_epoch - 1]
-    return to_be_minimized
+    return val_loss
 
 
 if __name__ == '__main__':
@@ -524,6 +546,7 @@ if __name__ == '__main__':
               'checkpoints_dir': 'checkpoints',
               'augm_target_subdir': 'augmented',
               'aug_metadata_file_name': 'augmented.csv',
+              'val_results_file_name': 'validation_results.csv',
               'py_seed': 44,
               'np_seed': 43,
               'tf_seed': 42}
@@ -532,9 +555,17 @@ if __name__ == '__main__':
     params['augm_target_dir'] = params['dataset_root'] + '/' + params['augm_target_subdir']
     params['image_size'] = params['image_shape'][:2]
 
+    with open(params['val_results_file_name'], 'a') as results_file:
+        writer = csv.writer(results_file)
+        writer.writerow(
+            ['Timestamp', 'Elapsed (sec)'] + [param_name for param_name in sorted(params.keys())] + ['F1', 'Precision',
+                                                                                               'Recall', 'ROC AUC',
+                                                                                               'AP',
+                                                                                               'Loss'])
     tpe_algorithm = tpe.suggest
     bayes_trials = Trials()
-    best = fmin(fn=run_experiment, space=params, algo=tpe.suggest, max_evals=4, trials=bayes_trials, verbose=False)
+    best = fmin(fn=run_experiment, space=params, algo=tpe.suggest, max_evals=2, trials=bayes_trials,
+                show_progressbar=False)
     print(bayes_trials.best_trial)
     input('Press [Enter] to end.')
 
