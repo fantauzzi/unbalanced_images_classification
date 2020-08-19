@@ -26,6 +26,7 @@ from hyperopt import Trials
 from hyperopt import fmin
 import csv
 from datetime import datetime
+import pickle
 
 
 def plot_samples(samples, fig_no):
@@ -56,7 +57,9 @@ def plot_misclassified_samples(validation_samples, model, theta, fig_no):
         if validation_samples.total_batches_seen > steps:
             break
         predicted_batch = model.predict(image_batch)
-        predicted_batch_id = (np.squeeze(predicted_batch) >= theta).astype(int)
+        ''' Don't use np.squeeze() here below, because otherwise an image_batch of size 1 becomes a scalar (instead
+        of the wanted array of lenght 1) '''
+        predicted_batch_id = (predicted_batch[:, 0] >= theta).astype(int)
         label_batch_id = label_batch.astype(int)
         correct_label_batch = np.array(['Positive' if item == 1 else 'Negative' for item in label_batch_id])
         assert len(image_batch) == len(predicted_batch_id)
@@ -486,9 +489,10 @@ def run_experiment(params):
         model.load_weights(weights_file)
 
     def compute_metrics(samples, prediction):
-        prediction = np.squeeze(prediction)
+        prediction = prediction[:, 0]
         assert len(prediction) == len(samples.labels)
-        predicted_id = (np.squeeze(prediction) >= theta).astype(int)
+        # predicted_id = (prediction[:, 0] >= theta).astype(int)
+        predicted_id = (prediction >= theta).astype(int)
         f1 = f1_score(samples.labels, predicted_id)
         pre = precision_score(samples.labels, predicted_id)
         recall = recall_score(samples.labels, predicted_id)
@@ -520,7 +524,7 @@ def run_experiment(params):
 
     test_data = make_test_generator()
     test_prediction = model.predict(test_data, batch_size=test_data.batch_size, verbose=1)
-    test_prediction = np.squeeze(test_prediction)
+    test_prediction = test_prediction[:, 0]
     print('Metrics on test set:')
     test_metrics = compute_metrics(validation_data, validation_prediction)
     print_metrics(*test_metrics)
@@ -534,12 +538,12 @@ def run_experiment(params):
 
 
 if __name__ == '__main__':
-    params = {'n_epochs': 2,  # TODO use a named tuple instead?
+    params = {'n_epochs': 3,  # TODO use a named tuple instead?
               'batch_size': hp.quniform('batch_size', 16, 32, 1),
               'val_batch_size': 64,
-              'test_set_fraction': hp.uniform('test_set_fraction', .20, .35),
+              'test_set_fraction': hp.uniform('test_set_fraction', .20, .30),
               'augm_batch_size': 64,
-              'augm_factor': hp.choice('augm_factor', (0, 1, 2, 3, 4)),
+              'augm_factor': hp.choice('augm_factor', (1, 2, 3, 4)),
               'theta': .5,
               'image_shape': (224, 224, 3),
               'dataset_root': '/home/fanta/.keras/datasets/102flowers/jpg',
@@ -559,24 +563,46 @@ if __name__ == '__main__':
         writer = csv.writer(results_file)
         writer.writerow(
             ['Timestamp', 'Elapsed (sec)'] + [param_name for param_name in sorted(params.keys())] + ['F1', 'Precision',
-                                                                                               'Recall', 'ROC AUC',
-                                                                                               'AP',
-                                                                                               'Loss'])
+                                                                                                     'Recall',
+                                                                                                     'ROC AUC',
+                                                                                                     'AP',
+                                                                                                     'Loss'])
     tpe_algorithm = tpe.suggest
-    bayes_trials = Trials()
-    best = fmin(fn=run_experiment, space=params, algo=tpe.suggest, max_evals=2, trials=bayes_trials,
-                show_progressbar=False)
+    trials_path = Path('trials.pickle')
+    max_iter = 10
+
+    if trials_path.exists():
+        with open(trials_path, 'rb') as pickle_file:
+            bayes_trials = pickle.load(pickle_file)
+        print('Loaded status of hyper-parameters tuning from file {}, resuming since iteration {}.'.format(
+            trials_path,
+            len(
+                bayes_trials) + 1))
+    else:
+        bayes_trials = Trials()
+
+    for i in range(max_iter):
+        print('Trial no.', len(bayes_trials) + 1)
+        best = fmin(fn=run_experiment,
+                    space=params,
+                    algo=tpe.suggest,
+                    max_evals=len(bayes_trials) + 1,
+                    trials=bayes_trials,
+                    show_progressbar=False)
+        with open(trials_path, 'wb') as pickle_file:
+            pickle.dump(bayes_trials, pickle_file, pickle.HIGHEST_PROTOCOL)
+
     print(bayes_trials.best_trial)
-    input('Press [Enter] to end.')
+    input('All done. Press [Enter] to end.')
 
     """ 
     TODO
+    insert dataset with x-rays
+    explainability
     Introduce tensorboard
     Check new memory profiles on tensorboard
     Introduce regularization, early stopping, lowering learning rate, resuming training
-    try monitoring different metrics for early stopping, e.g. AUC or F1
+    try monitoring different metrics for early stopping, e .g. AUC or F1
     try validation with balanced classes
     Implement explainability
-    Framework to automate experiments
-    Make a dashboard
     """

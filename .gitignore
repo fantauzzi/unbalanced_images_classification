@@ -143,3 +143,4 @@ cython_debug/
 checkpoints/
 augmented.csv
 validation_results.csv
+trials.pickle
